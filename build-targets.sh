@@ -19,6 +19,6 @@ fi
 make clean || exit 1
 # builddeps needs manual intervention to accept some certs
 yes p | make builddeps || exit 1
-make android_arm.release -j8 i18nsupport=off || exit 1
+make android_arm.release -j6 i18nsupport=off || exit 1
 
 git rev-parse HEAD > .buildRev

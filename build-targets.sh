@@ -6,7 +6,7 @@ cd "`dirname $0`"
 
 # Only rebuild if we're at a different revision than what's been built already, unless 'force' is specified
 BUILDREV=out/buildRev
-if [ "$1" != "force" ] && [ -f $BUILDREV ] && [ "`cat $BUILDREV`" == "`git rev-parse HEAD`" ] ; then
+if [ "$1" != "force" ] && [ -f $BUILDREV ] && [ "`cat $BUILDREV`" = "`git rev-parse HEAD`" ] ; then
     echo "V8 is up-to-date"
     exit 0
 fi
@@ -21,4 +21,4 @@ make clean || exit 1
 yes p | make builddeps || exit 1
 make android_arm.release -j6 i18nsupport=off || exit 1
 
-git rev-parse HEAD > .buildRev
+git rev-parse HEAD > $BUILDREV

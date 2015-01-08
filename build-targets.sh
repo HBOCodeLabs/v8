@@ -16,7 +16,8 @@ if [ -z "$ANDROID_NDK_ROOT" ] ; then
     exit 0
 fi
 
-make clean || exit 1
+make clean
+
 # builddeps needs manual intervention to accept some certs
 yes p | make builddeps || exit 1
 make android_arm.release -j6 i18nsupport=off || exit 1

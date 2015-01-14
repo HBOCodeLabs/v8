@@ -17,6 +17,9 @@ fi
 BUNDLE=out/hadron-v8-bundle/`git rev-parse --short HEAD`
 mkdir -p $BUNDLE
 
+doxygen
+cp -r doc $BUNDLE
+
 cp -r include $BUNDLE
 
 make builddeps || exit 1

@@ -22,8 +22,6 @@ cp -r doc $BUNDLE
 
 cp -r include $BUNDLE
 
-make builddeps || exit 1
-
 for ABI in $ABILIST ; do
     ABI=${1:-armeabi-v7a}
 

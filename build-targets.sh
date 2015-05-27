@@ -11,7 +11,7 @@ fi
 
 ABILIST="$@"
 if [ -z "$ABILIST" ] ; then
-    ABILIST="armeabi-v7a"
+    ABILIST="armeabi-v7a x86"
 fi
 
 BUNDLE=out/hadron-v8-bundle/`git rev-parse --short HEAD`
@@ -33,6 +33,12 @@ for ABI in $ABILIST ; do
     arm)
         V8TARGET=android_arm.release
         V8OPTS="arm7=false"
+        ;;
+    arm64)
+        V8TARGET=android_arm64.release
+        ;;
+    x86)
+        V8TARGET=android_ia32.release
         ;;
     *)
         echo "Unknown/unsupported ABI $ABI" 1>&2

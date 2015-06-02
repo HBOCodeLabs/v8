@@ -23,8 +23,6 @@ cp -r doc $BUNDLE
 cp -r include $BUNDLE
 
 for ABI in $ABILIST ; do
-    ABI=${1:-armeabi-v7a}
-
     case "$ABI" in
     armeabi-v7a)
         V8TARGET=android_arm.release

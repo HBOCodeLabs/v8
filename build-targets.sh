@@ -4,15 +4,12 @@
 # ensure we run in this directory
 cd "`dirname $0`"
 
-if [ -z "$ANDROID_NDK_ROOT" ] ; then
-    echo "ANDROID_NDK_ROOT variable not set" 2>&1
-    exit 1
-fi
-
 ABILIST="$@"
 if [ -z "$ABILIST" ] ; then
     ABILIST="armeabi-v7a x86"
 fi
+
+gclient sync --nohooks
 
 BUNDLE=out/hadron-v8-bundle/`git rev-parse --short HEAD`
 mkdir -p $BUNDLE

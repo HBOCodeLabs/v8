@@ -1541,8 +1541,8 @@
                   # don't want to re-include them here since this will change
                   # library order and break (see crbug.com/469973).
                   'libraries': [
-                    '-ldl',
-                    '-lrt'
+#                    '-ldl',
+#                    '-lrt'
                   ]
                 }]
               ]

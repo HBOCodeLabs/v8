@@ -34,6 +34,7 @@ for ABI in $ABILIST ; do
         ;;
     x86)
         V8TARGET=android_ia32.release
+	V8OPTS="arm_version=default"
         ;;
     *)
         echo "Unknown/unsupported ABI $ABI" 1>&2

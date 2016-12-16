@@ -5,7 +5,7 @@
 // Platform-specific code for POSIX goes here. This is not a platform on its
 // own, but contains the parts which are the same across the POSIX platforms
 // Linux, MacOS, FreeBSD, OpenBSD, NetBSD and QNX.
-
+#undef V8_ANDROID_LOG_STDOUT
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
@@ -16,7 +16,6 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
-
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -31,7 +30,7 @@
 
 #if defined(ANDROID) && !defined(V8_ANDROID_LOG_STDOUT)
 #define LOG_TAG "v8"
-#include <android/log.h>  // NOLINT
+#include "/home/jlundbla/Downloads/android-ndk-r10e/platforms/android-14/arch-x86/usr/include/android/log.h" // NOLINT
 #endif
 
 #include <cmath>
@@ -426,7 +425,7 @@ FILE* OS::OpenTemporaryFile() {
 }
 
 
-const char* const OS::LogFileOpenMode = "w";
+const char* const OS::LogFileOpenMode = "a+";
 
 
 void OS::Print(const char* format, ...) {
@@ -746,9 +745,14 @@ void* Thread::GetThreadLocal(LocalStorageKey key) {
 }
 
 
-void Thread::SetThreadLocal(LocalStorageKey key, void* value) {
+void Thread::SetThreadLocal(LocalStorageKey key, void* value, int trace) {
   pthread_key_t pthread_key = LocalKeyToPthreadKey(key);
   int result = pthread_setspecific(pthread_key, value);
+  void* new_value = pthread_getspecific(pthread_key);
+  //if ( new_value != value)
+//	OS::Print("Thread::SetThreadLocal %p != %p",new_value,value);
+ // if (trace == 1)
+  //  OS::Print("Thread::SetThreadLocal(%p,%p) key=%p result=%d new_value=%p",key,value,pthread_key,result,new_value);
   DCHECK_EQ(0, result);
   USE(result);
 }

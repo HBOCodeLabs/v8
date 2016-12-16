@@ -343,6 +343,11 @@ void SignalHandler::HandleProfilerSignal(int signal, siginfo_t* info,
   Isolate* isolate = Isolate::UnsafeCurrent();
   if (isolate == NULL || !isolate->IsInUse()) {
     // We require a fully initialized and entered isolate.
+    //if (isolate == NULL)
+    //	base::OS::Print("SignalHandler::HandleProfilerSignal() isolate=NULL");
+    //else
+    //	base::OS::Print("SignalHandler::HandleProfilerSignal() isolate=%p isolate->IsInUse()=%s",isolate,isolate->IsInUse() ? "true":"false");
+	
     return;
   }
   if (v8::Locker::IsActive() &&

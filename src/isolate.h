@@ -482,6 +482,7 @@ class Isolate {
   // Like UncheckedCurrent, but skips the check that |isolate_key_| was
   // initialized. Callers have to ensure that themselves.
   INLINE(static Isolate* UnsafeCurrent()) {
+    //base::OS::Print("Isolate::UnsafeCurrent() isolate_key_=%p",isolate_key_);
     return reinterpret_cast<Isolate*>(
         base::Thread::GetThreadLocal(isolate_key_));
   }

@@ -6,7 +6,6 @@
 
 #include <fstream>  // NOLINT(readability/streams)
 #include <sstream>
-
 #include "src/v8.h"
 
 #include "src/ast.h"
@@ -155,6 +154,7 @@ void Isolate::InitializeOncePerProcess() {
   base::LockGuard<base::Mutex> lock_guard(thread_data_table_mutex_.Pointer());
   CHECK(thread_data_table_ == NULL);
   isolate_key_ = base::Thread::CreateThreadLocalKey();
+  //base::OS::Print("Isolate::InitializeOncePerProcess isolate_key_ = %p", isolate_key_);
 #if DEBUG
   base::NoBarrier_Store(&isolate_key_created_, 1);
 #endif
@@ -1825,8 +1825,10 @@ void Isolate::TearDown() {
   // the isolate can access it in their destructors without having a
   // direct pointer. We don't use Enter/Exit here to avoid
   // initializing the thread data.
+
   PerIsolateThreadData* saved_data = CurrentPerIsolateThreadData();
   Isolate* saved_isolate = UncheckedCurrent();
+  //base::OS::Print("Isolate::TearDown()");
   SetIsolateThreadLocals(this, NULL);
 
   Deinit();
@@ -1913,7 +1915,9 @@ void Isolate::Deinit() {
 
 void Isolate::SetIsolateThreadLocals(Isolate* isolate,
                                      PerIsolateThreadData* data) {
-  base::Thread::SetThreadLocal(isolate_key_, isolate);
+  //base::OS::Print("Isolate::SetIsolateThreadLocals(%p,%p)",isolate,data);
+  //base::OS::Print("isolate_key_=%p",isolate_key_);
+  base::Thread::SetThreadLocal(isolate_key_, isolate, 1);
   base::Thread::SetThreadLocal(per_isolate_thread_data_key_, data);
 }
 
@@ -2250,6 +2254,7 @@ StatsTable* Isolate::stats_table() {
 
 
 void Isolate::Enter() {
+  //base::OS::Print("Isolate::Enter()");
   Isolate* current_isolate = NULL;
   PerIsolateThreadData* current_data = CurrentPerIsolateThreadData();
   if (current_data != NULL) {
@@ -2284,6 +2289,7 @@ void Isolate::Enter() {
 
 
 void Isolate::Exit() {
+  //base::OS::Print("Isolate::Exit()");
   DCHECK(entry_stack_ != NULL);
   DCHECK(entry_stack_->previous_thread_data == NULL ||
          entry_stack_->previous_thread_data->thread_id().Equals(

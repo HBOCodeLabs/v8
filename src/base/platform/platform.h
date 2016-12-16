@@ -425,7 +425,7 @@ class Thread {
   static int GetThreadLocalInt(LocalStorageKey key) {
     return static_cast<int>(reinterpret_cast<intptr_t>(GetThreadLocal(key)));
   }
-  static void SetThreadLocal(LocalStorageKey key, void* value);
+  static void SetThreadLocal(LocalStorageKey key, void* value, int trace = 0);
   static void SetThreadLocalInt(LocalStorageKey key, int value) {
     SetThreadLocal(key, reinterpret_cast<void*>(static_cast<intptr_t>(value)));
   }

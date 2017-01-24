@@ -2,11 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/factory.h"
+#include "src/identity-map.h"
+#include "src/isolate.h"
+#include "src/objects.h"
+#include "src/zone/zone.h"
+// FIXME(mstarzinger, marja): This is weird, but required because of the missing
+// (disallowed) include: src/factory.h -> src/objects-inl.h
+#include "src/objects-inl.h"
+// FIXME(mstarzinger, marja): This is weird, but required because of the missing
+// (disallowed) include: src/type-feedback-vector.h ->
+// src/type-feedback-vector-inl.h
+#include "src/type-feedback-vector-inl.h"
 #include "src/v8.h"
-
-#include "src/heap/identity-map.h"
-#include "src/zone.h"
-
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -178,7 +186,7 @@ TEST(GetFind_num_1000) {
   int val1;
   int val2;
 
-  for (int i = 1; i < 1000; i++) {
+  for (int i = 0; i < 1000; i++) {
     t.TestGetFind(t.smi(i * kPrime), &val1, t.smi(i * kPrime + 1), &val2);
   }
 }
@@ -327,7 +335,7 @@ TEST(ExplicitGC) {
   }
 
   // Do an explicit, real GC.
-  t.heap()->CollectGarbage(i::NEW_SPACE);
+  t.heap()->CollectGarbage(i::NEW_SPACE, i::GarbageCollectionReason::kTesting);
 
   // Check that searching for the numbers finds the same values.
   for (size_t i = 0; i < arraysize(num_keys); i++) {
@@ -335,5 +343,86 @@ TEST(ExplicitGC) {
     t.CheckGet(num_keys[i], &num_keys[i]);
   }
 }
+
+
+TEST(CanonicalHandleScope) {
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = CcTest::heap();
+  HandleScope outer(isolate);
+  CanonicalHandleScope outer_canonical(isolate);
+
+  // Deduplicate smi handles.
+  List<Handle<Object> > smi_handles;
+  for (int i = 0; i < 100; i++) {
+    smi_handles.Add(Handle<Object>(Smi::FromInt(i), isolate));
+  }
+  Object** next_handle = isolate->handle_scope_data()->next;
+  for (int i = 0; i < 100; i++) {
+    Handle<Object> new_smi = Handle<Object>(Smi::FromInt(i), isolate);
+    Handle<Object> old_smi = smi_handles[i];
+    CHECK_EQ(new_smi.location(), old_smi.location());
+  }
+  // Check that no new handles have been allocated.
+  CHECK_EQ(next_handle, isolate->handle_scope_data()->next);
+
+  // Deduplicate root list items.
+  Handle<String> empty_string(heap->empty_string());
+  Handle<Map> free_space_map(heap->free_space_map());
+  Handle<Symbol> uninitialized_symbol(heap->uninitialized_symbol());
+  CHECK_EQ(isolate->factory()->empty_string().location(),
+           empty_string.location());
+  CHECK_EQ(isolate->factory()->free_space_map().location(),
+           free_space_map.location());
+  CHECK_EQ(isolate->factory()->uninitialized_symbol().location(),
+           uninitialized_symbol.location());
+  // Check that no new handles have been allocated.
+  CHECK_EQ(next_handle, isolate->handle_scope_data()->next);
+
+  // Test ordinary heap objects.
+  Handle<HeapNumber> number1 = isolate->factory()->NewHeapNumber(3.3);
+  Handle<String> string1 =
+      isolate->factory()->NewStringFromAsciiChecked("test");
+  next_handle = isolate->handle_scope_data()->next;
+  Handle<HeapNumber> number2(*number1);
+  Handle<String> string2(*string1);
+  CHECK_EQ(number1.location(), number2.location());
+  CHECK_EQ(string1.location(), string2.location());
+  CcTest::CollectAllGarbage(i::Heap::kFinalizeIncrementalMarkingMask);
+  Handle<HeapNumber> number3(*number2);
+  Handle<String> string3(*string2);
+  CHECK_EQ(number1.location(), number3.location());
+  CHECK_EQ(string1.location(), string3.location());
+  // Check that no new handles have been allocated.
+  CHECK_EQ(next_handle, isolate->handle_scope_data()->next);
+
+  // Inner handle scope do not create canonical handles.
+  {
+    HandleScope inner(isolate);
+    Handle<HeapNumber> number4(*number1);
+    Handle<String> string4(*string1);
+    CHECK_NE(number1.location(), number4.location());
+    CHECK_NE(string1.location(), string4.location());
+
+    // Nested canonical scope does not conflict with outer canonical scope,
+    // but does not canonicalize across scopes.
+    CanonicalHandleScope inner_canonical(isolate);
+    Handle<HeapNumber> number5(*number4);
+    Handle<String> string5(*string4);
+    CHECK_NE(number4.location(), number5.location());
+    CHECK_NE(string4.location(), string5.location());
+    CHECK_NE(number1.location(), number5.location());
+    CHECK_NE(string1.location(), string5.location());
+
+    Handle<HeapNumber> number6(*number1);
+    Handle<String> string6(*string1);
+    CHECK_NE(number4.location(), number6.location());
+    CHECK_NE(string4.location(), string6.location());
+    CHECK_NE(number1.location(), number6.location());
+    CHECK_NE(string1.location(), string6.location());
+    CHECK_EQ(number5.location(), number6.location());
+    CHECK_EQ(string5.location(), string6.location());
+  }
 }
-}
+
+}  // namespace internal
+}  // namespace v8

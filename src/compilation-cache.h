@@ -5,6 +5,10 @@
 #ifndef V8_COMPILATION_CACHE_H_
 #define V8_COMPILATION_CACHE_H_
 
+#include "src/allocation.h"
+#include "src/handles.h"
+#include "src/objects.h"
+
 namespace v8 {
 namespace internal {
 
@@ -206,7 +210,7 @@ class CompilationCache {
   explicit CompilationCache(Isolate* isolate);
   ~CompilationCache();
 
-  HashMap* EagerOptimizingSet();
+  base::HashMap* EagerOptimizingSet();
 
   // The number of sub caches covering the different types to cache.
   static const int kSubCacheCount = 4;
@@ -232,6 +236,7 @@ class CompilationCache {
 };
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_COMPILATION_CACHE_H_

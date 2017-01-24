@@ -2,12 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
-#include "test/cctest/cctest.h"
-
 #include "src/compiler/instruction.h"
 #include "src/compiler/instruction-codes.h"
 #include "src/compiler/jump-threading.h"
+#include "test/cctest/cctest.h"
 
 namespace v8 {
 namespace internal {
@@ -59,14 +57,18 @@ class TestCode : public HandleAndZoneScope {
     Start();
     sequence_.AddInstruction(Instruction::New(main_zone(), kArchNop));
     int index = static_cast<int>(sequence_.instructions().size()) - 1;
-    AddGapMove(index, RegisterOperand(kRepWord32, 13),
-               RegisterOperand(kRepWord32, 13));
+    AddGapMove(index, AllocatedOperand(LocationOperand::REGISTER,
+                                       MachineRepresentation::kWord32, 13),
+               AllocatedOperand(LocationOperand::REGISTER,
+                                MachineRepresentation::kWord32, 13));
   }
   void NonRedundantMoves() {
     Start();
     sequence_.AddInstruction(Instruction::New(main_zone(), kArchNop));
     int index = static_cast<int>(sequence_.instructions().size()) - 1;
-    AddGapMove(index, ConstantOperand(11), RegisterOperand(kRepWord32, 11));
+    AddGapMove(index, ConstantOperand(11),
+               AllocatedOperand(LocationOperand::REGISTER,
+                                MachineRepresentation::kWord32, 11));
   }
   void Other() {
     Start();
@@ -85,7 +87,7 @@ class TestCode : public HandleAndZoneScope {
     if (current_ == NULL) {
       current_ = new (main_zone())
           InstructionBlock(main_zone(), rpo_number_, RpoNumber::Invalid(),
-                           RpoNumber::Invalid(), deferred);
+                           RpoNumber::Invalid(), deferred, false);
       blocks_.push_back(current_);
       sequence_.StartBlock(rpo_number_);
     }
@@ -104,9 +106,10 @@ class TestCode : public HandleAndZoneScope {
 
 
 void VerifyForwarding(TestCode& code, int count, int* expected) {
-  Zone local_zone;
+  v8::internal::AccountingAllocator allocator;
+  Zone local_zone(&allocator);
   ZoneVector<RpoNumber> result(&local_zone);
-  JumpThreading::ComputeForwarding(&local_zone, result, &code.sequence_);
+  JumpThreading::ComputeForwarding(&local_zone, result, &code.sequence_, true);
 
   CHECK(count == static_cast<int>(result.size()));
   for (int i = 0; i < count; i++) {

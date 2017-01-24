@@ -2,27 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/flags.h"
+
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
 
-#include "src/v8.h"
-
+#include "src/allocation.h"
 #include "src/assembler.h"
 #include "src/base/functional.h"
 #include "src/base/platform/platform.h"
+#include "src/list-inl.h"
 #include "src/ostreams.h"
+#include "src/utils.h"
 
 namespace v8 {
 namespace internal {
 
 // Define all of our flags.
 #define FLAG_MODE_DEFINE
-#include "src/flag-definitions.h"  // NOLINT
+#include "src/flag-definitions.h"  // NOLINT(build/include)
 
 // Define all of our flags default values.
 #define FLAG_MODE_DEFINE_DEFAULTS
-#include "src/flag-definitions.h"  // NOLINT
+#include "src/flag-definitions.h"  // NOLINT(build/include)
 
 namespace {
 
@@ -161,7 +164,7 @@ struct Flag {
 
 Flag flags[] = {
 #define FLAG_MODE_META
-#include "src/flag-definitions.h"
+#include "src/flag-definitions.h"  // NOLINT(build/include)
 };
 
 const size_t num_flags = sizeof(flags) / sizeof(*flags);
@@ -426,6 +429,10 @@ int FlagList::SetFlagsFromCommandLine(int* argc,
         PrintF(stderr, "Error: illegal value for flag %s of type %s\n"
                "Try --help for options\n",
                arg, Type2String(flag->type()));
+        if (is_bool_type) {
+          PrintF(stderr,
+                 "To set or unset a boolean flag, use --flag or --no-flag.\n");
+        }
         return_code = j;
         break;
       }
@@ -567,11 +574,12 @@ void ComputeFlagListHash() {
 // static
 void FlagList::EnforceFlagImplications() {
 #define FLAG_MODE_DEFINE_IMPLICATIONS
-#include "src/flag-definitions.h"
+#include "src/flag-definitions.h"  // NOLINT(build/include)
 #undef FLAG_MODE_DEFINE_IMPLICATIONS
   ComputeFlagListHash();
 }
 
 
 uint32_t FlagList::Hash() { return flag_hash; }
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

@@ -4,7 +4,8 @@
 
 #include "src/pending-compilation-error-handler.h"
 
-#include "src/debug.h"
+#include "src/ast/ast-value-factory.h"
+#include "src/debug/debug.h"
 #include "src/handles.h"
 #include "src/isolate.h"
 #include "src/messages.h"
@@ -31,14 +32,19 @@ void PendingCompilationErrorHandler::ThrowPendingError(Isolate* isolate,
   Handle<Object> error;
   switch (error_type_) {
     case kReferenceError:
-      error = factory->NewError("MakeReferenceError", message_, argument);
+      error = factory->NewReferenceError(message_, argument);
       break;
     case kSyntaxError:
-      error = factory->NewError("MakeSyntaxError", message_, argument);
+      error = factory->NewSyntaxError(message_, argument);
       break;
     default:
       UNREACHABLE();
       break;
+  }
+
+  if (!error->IsJSObject()) {
+    isolate->Throw(*error, &location);
+    return;
   }
 
   Handle<JSObject> jserror = Handle<JSObject>::cast(error);
@@ -58,5 +64,5 @@ void PendingCompilationErrorHandler::ThrowPendingError(Isolate* isolate,
 
   isolate->Throw(*error, &location);
 }
-}
-}  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

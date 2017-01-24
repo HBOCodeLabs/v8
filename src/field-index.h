@@ -19,16 +19,20 @@ class Map;
 // index it was originally generated from.
 class FieldIndex final {
  public:
+  FieldIndex() : bit_field_(0) {}
+
   static FieldIndex ForPropertyIndex(Map* map,
                                      int index,
                                      bool is_double = false);
   static FieldIndex ForInObjectOffset(int offset, Map* map = NULL);
   static FieldIndex ForDescriptor(Map* map, int descriptor_index);
   static FieldIndex ForLoadByFieldIndex(Map* map, int index);
+  static FieldIndex ForLoadByFieldOffset(Map* map, int index);
   static FieldIndex ForKeyedLookupCacheIndex(Map* map, int index);
   static FieldIndex FromFieldAccessStubKey(int key);
 
   int GetLoadByFieldIndex() const;
+  int GetLoadByFieldOffset() const;
 
   bool is_inobject() const {
     return IsInObjectBits::decode(bit_field_);
@@ -72,6 +76,11 @@ class FieldIndex final {
         (IsInObjectBits::kMask | IsDoubleBits::kMask | IndexBits::kMask);
   }
 
+  bool operator==(FieldIndex const& other) const {
+    return bit_field_ == other.bit_field_;
+  }
+  bool operator!=(FieldIndex const& other) const { return !(*this == other); }
+
  private:
   FieldIndex(bool is_inobject, int local_index, bool is_double,
              int inobject_properties, int first_inobject_property_offset,
@@ -111,6 +120,7 @@ class FieldIndex final {
   int bit_field_;
 };
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif

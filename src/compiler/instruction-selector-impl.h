@@ -51,31 +51,53 @@ class OperandGenerator {
 
   InstructionOperand DefineAsFixed(Node* node, Register reg) {
     return Define(node, UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER,
-                                           Register::ToAllocationIndex(reg),
-                                           GetVReg(node)));
+                                           reg.code(), GetVReg(node)));
   }
 
-  InstructionOperand DefineAsFixed(Node* node, DoubleRegister reg) {
+  template <typename FPRegType>
+  InstructionOperand DefineAsFixed(Node* node, FPRegType reg) {
     return Define(node,
-                  UnallocatedOperand(UnallocatedOperand::FIXED_DOUBLE_REGISTER,
-                                     DoubleRegister::ToAllocationIndex(reg),
-                                     GetVReg(node)));
+                  UnallocatedOperand(UnallocatedOperand::FIXED_FP_REGISTER,
+                                     reg.code(), GetVReg(node)));
   }
 
   InstructionOperand DefineAsConstant(Node* node) {
+    return DefineAsConstant(node, ToConstant(node));
+  }
+
+  InstructionOperand DefineAsConstant(Node* node, Constant constant) {
     selector()->MarkAsDefined(node);
     int virtual_register = GetVReg(node);
-    sequence()->AddConstant(virtual_register, ToConstant(node));
+    sequence()->AddConstant(virtual_register, constant);
     return ConstantOperand(virtual_register);
   }
 
-  InstructionOperand DefineAsLocation(Node* node, LinkageLocation location,
-                                      MachineType type) {
-    return Define(node, ToUnallocatedOperand(location, type, GetVReg(node)));
+  InstructionOperand DefineAsLocation(Node* node, LinkageLocation location) {
+    return Define(node, ToUnallocatedOperand(location, GetVReg(node)));
+  }
+
+  InstructionOperand DefineAsDualLocation(Node* node,
+                                          LinkageLocation primary_location,
+                                          LinkageLocation secondary_location) {
+    return Define(node,
+                  ToDualLocationUnallocatedOperand(
+                      primary_location, secondary_location, GetVReg(node)));
   }
 
   InstructionOperand Use(Node* node) {
     return Use(node, UnallocatedOperand(UnallocatedOperand::NONE,
+                                        UnallocatedOperand::USED_AT_START,
+                                        GetVReg(node)));
+  }
+
+  InstructionOperand UseAnyAtEnd(Node* node) {
+    return Use(node, UnallocatedOperand(UnallocatedOperand::ANY,
+                                        UnallocatedOperand::USED_AT_END,
+                                        GetVReg(node)));
+  }
+
+  InstructionOperand UseAny(Node* node) {
+    return Use(node, UnallocatedOperand(UnallocatedOperand::ANY,
                                         UnallocatedOperand::USED_AT_START,
                                         GetVReg(node)));
   }
@@ -107,24 +129,51 @@ class OperandGenerator {
 
   InstructionOperand UseFixed(Node* node, Register reg) {
     return Use(node, UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER,
-                                        Register::ToAllocationIndex(reg),
-                                        GetVReg(node)));
+                                        reg.code(), GetVReg(node)));
   }
 
-  InstructionOperand UseFixed(Node* node, DoubleRegister reg) {
-    return Use(node,
-               UnallocatedOperand(UnallocatedOperand::FIXED_DOUBLE_REGISTER,
-                                  DoubleRegister::ToAllocationIndex(reg),
-                                  GetVReg(node)));
+  template <typename FPRegType>
+  InstructionOperand UseFixed(Node* node, FPRegType reg) {
+    return Use(node, UnallocatedOperand(UnallocatedOperand::FIXED_FP_REGISTER,
+                                        reg.code(), GetVReg(node)));
+  }
+
+  InstructionOperand UseExplicit(LinkageLocation location) {
+    MachineRepresentation rep = InstructionSequence::DefaultRepresentation();
+    if (location.IsRegister()) {
+      return ExplicitOperand(LocationOperand::REGISTER, rep,
+                             location.AsRegister());
+    } else {
+      return ExplicitOperand(LocationOperand::STACK_SLOT, rep,
+                             location.GetLocation());
+    }
+  }
+
+  InstructionOperand UseImmediate(int immediate) {
+    return sequence()->AddImmediate(Constant(immediate));
   }
 
   InstructionOperand UseImmediate(Node* node) {
     return sequence()->AddImmediate(ToConstant(node));
   }
 
-  InstructionOperand UseLocation(Node* node, LinkageLocation location,
-                                 MachineType type) {
-    return Use(node, ToUnallocatedOperand(location, type, GetVReg(node)));
+  InstructionOperand UseNegatedImmediate(Node* node) {
+    return sequence()->AddImmediate(ToNegatedConstant(node));
+  }
+
+  InstructionOperand UseLocation(Node* node, LinkageLocation location) {
+    return Use(node, ToUnallocatedOperand(location, GetVReg(node)));
+  }
+
+  // Used to force gap moves from the from_location to the to_location
+  // immediately before an instruction.
+  InstructionOperand UsePointerLocation(LinkageLocation to_location,
+                                        LinkageLocation from_location) {
+    UnallocatedOperand casted_from_operand =
+        UnallocatedOperand::cast(TempLocation(from_location));
+    selector_->Emit(kArchNop, casted_from_operand);
+    return ToUnallocatedOperand(to_location,
+                                casted_from_operand.virtual_register());
   }
 
   InstructionOperand TempRegister() {
@@ -137,13 +186,13 @@ class OperandGenerator {
     UnallocatedOperand op = UnallocatedOperand(
         UnallocatedOperand::MUST_HAVE_REGISTER,
         UnallocatedOperand::USED_AT_START, sequence()->NextVirtualRegister());
-    sequence()->MarkAsRepresentation(kRepFloat64, op.virtual_register());
+    sequence()->MarkAsRepresentation(MachineRepresentation::kFloat64,
+                                     op.virtual_register());
     return op;
   }
 
   InstructionOperand TempRegister(Register reg) {
-    return UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER,
-                              Register::ToAllocationIndex(reg),
+    return UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER, reg.code(),
                               InstructionOperand::kInvalidVirtualRegister);
   }
 
@@ -151,9 +200,8 @@ class OperandGenerator {
     return sequence()->AddImmediate(Constant(imm));
   }
 
-  InstructionOperand TempLocation(LinkageLocation location, MachineType type) {
-    return ToUnallocatedOperand(location, type,
-                                sequence()->NextVirtualRegister());
+  InstructionOperand TempLocation(LinkageLocation location) {
+    return ToUnallocatedOperand(location, sequence()->NextVirtualRegister());
   }
 
   InstructionOperand Label(BasicBlock* block) {
@@ -177,13 +225,30 @@ class OperandGenerator {
         return Constant(OpParameter<int64_t>(node));
       case IrOpcode::kFloat32Constant:
         return Constant(OpParameter<float>(node));
+      case IrOpcode::kRelocatableInt32Constant:
+      case IrOpcode::kRelocatableInt64Constant:
+        return Constant(OpParameter<RelocatablePtrConstantInfo>(node));
       case IrOpcode::kFloat64Constant:
       case IrOpcode::kNumberConstant:
         return Constant(OpParameter<double>(node));
       case IrOpcode::kExternalConstant:
+      case IrOpcode::kComment:
         return Constant(OpParameter<ExternalReference>(node));
       case IrOpcode::kHeapConstant:
-        return Constant(OpParameter<Unique<HeapObject> >(node).handle());
+        return Constant(OpParameter<Handle<HeapObject>>(node));
+      default:
+        break;
+    }
+    UNREACHABLE();
+    return Constant(static_cast<int32_t>(0));
+  }
+
+  static Constant ToNegatedConstant(const Node* node) {
+    switch (node->opcode()) {
+      case IrOpcode::kInt32Constant:
+        return Constant(-OpParameter<int32_t>(node));
+      case IrOpcode::kInt64Constant:
+        return Constant(-OpParameter<int64_t>(node));
       default:
         break;
     }
@@ -205,33 +270,42 @@ class OperandGenerator {
     return operand;
   }
 
+  UnallocatedOperand ToDualLocationUnallocatedOperand(
+      LinkageLocation primary_location, LinkageLocation secondary_location,
+      int virtual_register) {
+    // We only support the primary location being a register and the secondary
+    // one a slot.
+    DCHECK(primary_location.IsRegister() &&
+           secondary_location.IsCalleeFrameSlot());
+    int reg_id = primary_location.AsRegister();
+    int slot_id = secondary_location.AsCalleeFrameSlot();
+    return UnallocatedOperand(reg_id, slot_id, virtual_register);
+  }
+
   UnallocatedOperand ToUnallocatedOperand(LinkageLocation location,
-                                          MachineType type,
                                           int virtual_register) {
-    if (location.location_ == LinkageLocation::ANY_REGISTER) {
+    if (location.IsAnyRegister()) {
       // any machine register.
       return UnallocatedOperand(UnallocatedOperand::MUST_HAVE_REGISTER,
                                 virtual_register);
     }
-    if (location.location_ < 0) {
+    if (location.IsCallerFrameSlot()) {
       // a location on the caller frame.
       return UnallocatedOperand(UnallocatedOperand::FIXED_SLOT,
-                                location.location_, virtual_register);
+                                location.AsCallerFrameSlot(), virtual_register);
     }
-    if (location.location_ > LinkageLocation::ANY_REGISTER) {
+    if (location.IsCalleeFrameSlot()) {
       // a spill location on this (callee) frame.
-      return UnallocatedOperand(
-          UnallocatedOperand::FIXED_SLOT,
-          location.location_ - LinkageLocation::ANY_REGISTER - 1,
-          virtual_register);
+      return UnallocatedOperand(UnallocatedOperand::FIXED_SLOT,
+                                location.AsCalleeFrameSlot(), virtual_register);
     }
     // a fixed register.
-    if (RepresentationOf(type) == kRepFloat64) {
-      return UnallocatedOperand(UnallocatedOperand::FIXED_DOUBLE_REGISTER,
-                                location.location_, virtual_register);
+    if (IsFloatingPoint(location.GetType().representation())) {
+      return UnallocatedOperand(UnallocatedOperand::FIXED_FP_REGISTER,
+                                location.AsRegister(), virtual_register);
     }
     return UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER,
-                              location.location_, virtual_register);
+                              location.AsRegister(), virtual_register);
   }
 
   InstructionSelector* selector_;
@@ -259,22 +333,37 @@ class FlagsContinuation final {
     DCHECK_NOT_NULL(false_block);
   }
 
-  // Creates a new flags continuation from the given condition and result node.
-  FlagsContinuation(FlagsCondition condition, Node* result)
-      : mode_(kFlags_set), condition_(condition), result_(result) {
-    DCHECK_NOT_NULL(result);
+  // Creates a new flags continuation for an eager deoptimization exit.
+  static FlagsContinuation ForDeoptimize(FlagsCondition condition,
+                                         DeoptimizeReason reason,
+                                         Node* frame_state) {
+    return FlagsContinuation(condition, reason, frame_state);
+  }
+
+  // Creates a new flags continuation for a boolean value.
+  static FlagsContinuation ForSet(FlagsCondition condition, Node* result) {
+    return FlagsContinuation(condition, result);
   }
 
   bool IsNone() const { return mode_ == kFlags_none; }
   bool IsBranch() const { return mode_ == kFlags_branch; }
+  bool IsDeoptimize() const { return mode_ == kFlags_deoptimize; }
   bool IsSet() const { return mode_ == kFlags_set; }
   FlagsCondition condition() const {
     DCHECK(!IsNone());
     return condition_;
   }
+  DeoptimizeReason reason() const {
+    DCHECK(IsDeoptimize());
+    return reason_;
+  }
+  Node* frame_state() const {
+    DCHECK(IsDeoptimize());
+    return frame_state_or_result_;
+  }
   Node* result() const {
     DCHECK(IsSet());
-    return result_;
+    return frame_state_or_result_;
   }
   BasicBlock* true_block() const {
     DCHECK(IsBranch());
@@ -292,47 +381,34 @@ class FlagsContinuation final {
 
   void Commute() {
     DCHECK(!IsNone());
-    switch (condition_) {
-      case kEqual:
-      case kNotEqual:
-      case kOverflow:
-      case kNotOverflow:
-        return;
-      case kSignedLessThan:
-        condition_ = kSignedGreaterThan;
-        return;
-      case kSignedGreaterThanOrEqual:
-        condition_ = kSignedLessThanOrEqual;
-        return;
-      case kSignedLessThanOrEqual:
-        condition_ = kSignedGreaterThanOrEqual;
-        return;
-      case kSignedGreaterThan:
-        condition_ = kSignedLessThan;
-        return;
-      case kUnsignedLessThan:
-        condition_ = kUnsignedGreaterThan;
-        return;
-      case kUnsignedGreaterThanOrEqual:
-        condition_ = kUnsignedLessThanOrEqual;
-        return;
-      case kUnsignedLessThanOrEqual:
-        condition_ = kUnsignedGreaterThanOrEqual;
-        return;
-      case kUnsignedGreaterThan:
-        condition_ = kUnsignedLessThan;
-        return;
-      case kUnorderedEqual:
-      case kUnorderedNotEqual:
-        return;
-    }
-    UNREACHABLE();
+    condition_ = CommuteFlagsCondition(condition_);
   }
+
+  void Overwrite(FlagsCondition condition) { condition_ = condition; }
 
   void OverwriteAndNegateIfEqual(FlagsCondition condition) {
     bool negate = condition_ == kEqual;
     condition_ = condition;
     if (negate) Negate();
+  }
+
+  void OverwriteUnsignedIfSigned() {
+    switch (condition_) {
+      case kSignedLessThan:
+        condition_ = kUnsignedLessThan;
+        break;
+      case kSignedLessThanOrEqual:
+        condition_ = kUnsignedLessThanOrEqual;
+        break;
+      case kSignedGreaterThan:
+        condition_ = kUnsignedGreaterThan;
+        break;
+      case kSignedGreaterThanOrEqual:
+        condition_ = kUnsignedGreaterThanOrEqual;
+        break;
+      default:
+        break;
+    }
   }
 
   // Encodes this flags continuation into the given opcode.
@@ -345,38 +421,28 @@ class FlagsContinuation final {
   }
 
  private:
-  FlagsMode mode_;
-  FlagsCondition condition_;
-  Node* result_;             // Only valid if mode_ == kFlags_set.
-  BasicBlock* true_block_;   // Only valid if mode_ == kFlags_branch.
-  BasicBlock* false_block_;  // Only valid if mode_ == kFlags_branch.
-};
-
-
-// An internal helper class for generating the operands to calls.
-// TODO(bmeurer): Get rid of the CallBuffer business and make
-// InstructionSelector::VisitCall platform independent instead.
-struct CallBuffer {
-  CallBuffer(Zone* zone, const CallDescriptor* descriptor,
-             FrameStateDescriptor* frame_state);
-
-  const CallDescriptor* descriptor;
-  FrameStateDescriptor* frame_state_descriptor;
-  NodeVector output_nodes;
-  InstructionOperandVector outputs;
-  InstructionOperandVector instruction_args;
-  NodeVector pushed_nodes;
-
-  size_t input_count() const { return descriptor->InputCount(); }
-
-  size_t frame_state_count() const { return descriptor->FrameStateCount(); }
-
-  size_t frame_state_value_count() const {
-    return (frame_state_descriptor == NULL)
-               ? 0
-               : (frame_state_descriptor->GetTotalSize() +
-                  1);  // Include deopt id.
+  FlagsContinuation(FlagsCondition condition, DeoptimizeReason reason,
+                    Node* frame_state)
+      : mode_(kFlags_deoptimize),
+        condition_(condition),
+        reason_(reason),
+        frame_state_or_result_(frame_state) {
+    DCHECK_NOT_NULL(frame_state);
   }
+  FlagsContinuation(FlagsCondition condition, Node* result)
+      : mode_(kFlags_set),
+        condition_(condition),
+        frame_state_or_result_(result) {
+    DCHECK_NOT_NULL(result);
+  }
+
+  FlagsMode const mode_;
+  FlagsCondition condition_;
+  DeoptimizeReason reason_;      // Only value if mode_ == kFlags_deoptimize
+  Node* frame_state_or_result_;  // Only valid if mode_ == kFlags_deoptimize
+                                 // or mode_ == kFlags_set.
+  BasicBlock* true_block_;       // Only valid if mode_ == kFlags_branch.
+  BasicBlock* false_block_;      // Only valid if mode_ == kFlags_branch.
 };
 
 }  // namespace compiler

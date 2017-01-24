@@ -7,7 +7,6 @@
 #include "src/snapshot/snapshot.h"
 
 #include "src/base/platform/mutex.h"
-#include "src/snapshot/serialize.h"
 #include "src/snapshot/snapshot-source-sink.h"
 #include "src/v8.h"  // for V8::Initialize
 
@@ -40,4 +39,5 @@ const v8::StartupData* Snapshot::DefaultSnapshotBlob() {
       external_startup_data_mutex.Pointer());
   return &external_startup_blob;
 }
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

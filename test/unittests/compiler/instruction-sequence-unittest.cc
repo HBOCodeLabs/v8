@@ -15,9 +15,16 @@ namespace compiler {
 static const char*
     general_register_names_[RegisterConfiguration::kMaxGeneralRegisters];
 static const char*
-    double_register_names_[RegisterConfiguration::kMaxDoubleRegisters];
+    double_register_names_[RegisterConfiguration::kMaxFPRegisters];
 static char register_names_[10 * (RegisterConfiguration::kMaxGeneralRegisters +
-                                  RegisterConfiguration::kMaxDoubleRegisters)];
+                                  RegisterConfiguration::kMaxFPRegisters)];
+
+namespace {
+static int allocatable_codes[InstructionSequenceTest::kDefaultNRegs] = {
+    0, 1, 2, 3, 4, 5, 6, 7};
+static int allocatable_double_codes[InstructionSequenceTest::kDefaultNRegs] = {
+    0, 1, 2, 3, 4, 5, 6, 7};
+}
 
 
 static void InitializeRegisterNames() {
@@ -27,7 +34,7 @@ static void InitializeRegisterNames() {
     loc += base::OS::SNPrintF(loc, 100, "gp_%d", i);
     *loc++ = 0;
   }
-  for (int i = 0; i < RegisterConfiguration::kMaxDoubleRegisters; ++i) {
+  for (int i = 0; i < RegisterConfiguration::kMaxFPRegisters; ++i) {
     double_register_names_[i] = loc;
     loc += base::OS::SNPrintF(loc, 100, "fp_%d", i) + 1;
     *loc++ = 0;
@@ -48,7 +55,7 @@ InstructionSequenceTest::InstructionSequenceTest()
 
 void InstructionSequenceTest::SetNumRegs(int num_general_registers,
                                          int num_double_registers) {
-  CHECK(config_.is_empty());
+  CHECK(!config_);
   CHECK(instructions_.empty());
   CHECK(instruction_blocks_.empty());
   num_general_registers_ = num_general_registers;
@@ -57,10 +64,17 @@ void InstructionSequenceTest::SetNumRegs(int num_general_registers,
 
 
 RegisterConfiguration* InstructionSequenceTest::config() {
-  if (config_.is_empty()) {
-    config_.Reset(new RegisterConfiguration(
-        num_general_registers_, num_double_registers_, num_double_registers_,
-        general_register_names_, double_register_names_));
+  if (!config_) {
+    config_.reset(new RegisterConfiguration(
+        num_general_registers_, num_double_registers_, num_general_registers_,
+        num_double_registers_, num_double_registers_, allocatable_codes,
+        allocatable_double_codes,
+        kSimpleFPAliasing ? RegisterConfiguration::OVERLAP
+                          : RegisterConfiguration::COMBINE,
+        general_register_names_,
+        double_register_names_,  // float register names
+        double_register_names_,
+        double_register_names_));  // SIMD 128 register names
   }
   return config_.get();
 }
@@ -93,9 +107,9 @@ void InstructionSequenceTest::EndLoop() {
 }
 
 
-void InstructionSequenceTest::StartBlock() {
+void InstructionSequenceTest::StartBlock(bool deferred) {
   block_returns_ = false;
-  NewBlock();
+  NewBlock(deferred);
 }
 
 
@@ -408,7 +422,7 @@ InstructionOperand InstructionSequenceTest::ConvertOutputOp(VReg vreg,
 }
 
 
-InstructionBlock* InstructionSequenceTest::NewBlock() {
+InstructionBlock* InstructionSequenceTest::NewBlock(bool deferred) {
   CHECK(current_block_ == nullptr);
   Rpo rpo = Rpo::FromInt(static_cast<int>(instruction_blocks_.size()));
   Rpo loop_header = Rpo::Invalid();
@@ -429,8 +443,8 @@ InstructionBlock* InstructionSequenceTest::NewBlock() {
     }
   }
   // Construct instruction block.
-  auto instruction_block =
-      new (zone()) InstructionBlock(zone(), rpo, loop_header, loop_end, false);
+  auto instruction_block = new (zone())
+      InstructionBlock(zone(), rpo, loop_header, loop_end, deferred, false);
   instruction_blocks_.push_back(instruction_block);
   current_block_ = instruction_block;
   sequence()->StartBlock(rpo);

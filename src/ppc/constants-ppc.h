@@ -5,6 +5,12 @@
 #ifndef V8_PPC_CONSTANTS_PPC_H_
 #define V8_PPC_CONSTANTS_PPC_H_
 
+#include <stdint.h>
+
+#include "src/base/logging.h"
+#include "src/base/macros.h"
+#include "src/globals.h"
+
 namespace v8 {
 namespace internal {
 
@@ -12,10 +18,14 @@ namespace internal {
 const int kNumRegisters = 32;
 
 // FP support.
-const int kNumFPDoubleRegisters = 32;
-const int kNumFPRegisters = kNumFPDoubleRegisters;
+const int kNumDoubleRegisters = 32;
 
 const int kNoRegister = -1;
+
+// Used in embedded constant pool builder - max reach in bits for
+// various load instructions (one less due to unsigned)
+const int kLoadPtrMaxReachBits = 15;
+const int kLoadDoubleMaxReachBits = 15;
 
 // sign-extend the least significant 16-bits of value <imm>
 #define SIGN_EXT_IMM16(imm) ((static_cast<int>(imm) << 16) >> 16)
@@ -218,6 +228,7 @@ enum OpcodeExt2 {
   LHAUX = 375 << 1,    // load half-word algebraic w/ update x-form
   XORX = 316 << 1,     // Exclusive OR
   MFSPR = 339 << 1,    // Move from Special-Purpose-Register
+  POPCNTW = 378 << 1,  // Population Count Words
   STHX = 407 << 1,     // store half-word w/ x-form
   ORC = 412 << 1,      // Or with Complement
   STHUX = 439 << 1,    // store half-word w/ update x-form
@@ -227,8 +238,11 @@ enum OpcodeExt2 {
   MTSPR = 467 << 1,    // Move to Special-Purpose-Register
   DIVD = 489 << 1,     // Divide Double Word
   DIVW = 491 << 1,     // Divide Word
+  POPCNTD = 506 << 1,  // Population Count Doubleword
 
   // Below represent bits 10-1  (any value >= 512)
+  LDBRX = 532 << 1,   // load double word byte reversed w/ x-form
+  LWBRX = 534 << 1,   // load word byte reversed w/ x-form
   LFSX = 535 << 1,    // load float-single w/ x-form
   SRWX = 536 << 1,    // Shift Right Word
   SRDX = 539 << 1,    // Shift Right Double Word
@@ -240,6 +254,7 @@ enum OpcodeExt2 {
   STFSUX = 695 << 1,  // store float-single w/ update x-form
   STFDX = 727 << 1,   // store float-double w/ x-form
   STFDUX = 759 << 1,  // store float-double w/ update x-form
+  LHBRX = 790 << 1,   // load half word byte reversed w/ x-form
   SRAW = 792 << 1,    // Shift Right Algebraic Word
   SRAD = 794 << 1,    // Shift Right Algebraic Double Word
   SRAWIX = 824 << 1,  // Shift Right Algebraic Word Immediate
@@ -263,24 +278,29 @@ enum OpcodeExt4 {
   FMADD = 29 << 1,  // Floating Multiply-Add
 
   // Bits 10-1
-  FCMPU = 0 << 1,     // Floating Compare Unordered
-  FRSP = 12 << 1,     // Floating-Point Rounding
-  FCTIW = 14 << 1,    // Floating Convert to Integer Word X-form
-  FCTIWZ = 15 << 1,   // Floating Convert to Integer Word with Round to Zero
-  FNEG = 40 << 1,     // Floating Negate
-  MCRFS = 64 << 1,    // Move to Condition Register from FPSCR
-  FMR = 72 << 1,      // Floating Move Register
-  MTFSFI = 134 << 1,  // Move to FPSCR Field Immediate
-  FABS = 264 << 1,    // Floating Absolute Value
-  FRIN = 392 << 1,    // Floating Round to Integer Nearest
-  FRIZ = 424 << 1,    // Floating Round to Integer Toward Zero
-  FRIP = 456 << 1,    // Floating Round to Integer Plus
-  FRIM = 488 << 1,    // Floating Round to Integer Minus
-  MFFS = 583 << 1,    // move from FPSCR x-form
-  MTFSF = 711 << 1,   // move to FPSCR fields XFL-form
-  FCFID = 846 << 1,   // Floating convert from integer doubleword
-  FCTID = 814 << 1,   // Floating convert from integer doubleword
-  FCTIDZ = 815 << 1   // Floating convert from integer doubleword
+  FCMPU = 0 << 1,      // Floating Compare Unordered
+  FRSP = 12 << 1,      // Floating-Point Rounding
+  FCTIW = 14 << 1,     // Floating Convert to Integer Word X-form
+  FCTIWZ = 15 << 1,    // Floating Convert to Integer Word with Round to Zero
+  MTFSB1 = 38 << 1,    // Move to FPSCR Bit 1
+  FNEG = 40 << 1,      // Floating Negate
+  MCRFS = 64 << 1,     // Move to Condition Register from FPSCR
+  MTFSB0 = 70 << 1,    // Move to FPSCR Bit 0
+  FMR = 72 << 1,       // Floating Move Register
+  MTFSFI = 134 << 1,   // Move to FPSCR Field Immediate
+  FABS = 264 << 1,     // Floating Absolute Value
+  FRIN = 392 << 1,     // Floating Round to Integer Nearest
+  FRIZ = 424 << 1,     // Floating Round to Integer Toward Zero
+  FRIP = 456 << 1,     // Floating Round to Integer Plus
+  FRIM = 488 << 1,     // Floating Round to Integer Minus
+  MFFS = 583 << 1,     // move from FPSCR x-form
+  MTFSF = 711 << 1,    // move to FPSCR fields XFL-form
+  FCTID = 814 << 1,    // Floating convert to integer doubleword
+  FCTIDZ = 815 << 1,   // ^^^ with round toward zero
+  FCFID = 846 << 1,    // Floating convert from integer doubleword
+  FCTIDU = 942 << 1,   // Floating convert to integer doubleword unsigned
+  FCTIDUZ = 943 << 1,  // ^^^ with round toward zero
+  FCFIDU = 974 << 1    // Floating convert from integer doubleword unsigned
 };
 
 enum OpcodeExt5 {
@@ -331,7 +351,8 @@ enum {
   kBOfieldMask = 0x1f << 21,
   kOpcodeMask = 0x3f << 26,
   kExt1OpcodeMask = 0x3ff << 1,
-  kExt2OpcodeMask = 0x1f << 1,
+  kExt2OpcodeMask = 0x3ff << 1,
+  kExt2OpcodeVariant2Mask = 0x1ff << 2,
   kExt5OpcodeMask = 0x3 << 2,
   kBOMask = 0x1f << 21,
   kBIMask = 0x1F << 16,
@@ -385,6 +406,13 @@ enum BOfield {        // Bits 25-21
 enum CRBit { CR_LT = 0, CR_GT = 1, CR_EQ = 2, CR_SO = 3, CR_FU = 3 };
 
 #define CRWIDTH 4
+
+// These are the documented bit positions biased down by 32
+enum FPSCRBit {
+  VXSOFT = 21,  // 53: Software-Defined Condition
+  VXSQRT = 22,  // 54: Invalid Square Root
+  VXCVI = 23    // 55: Invalid Integer Convert
+};
 
 // -----------------------------------------------------------------------------
 // Supervisor Call (svc) specific support.
@@ -552,35 +580,23 @@ class Instruction {
 // Helper functions for converting between register numbers and names.
 class Registers {
  public:
-  // Return the name of the register.
-  static const char* Name(int reg);
-
   // Lookup the register number for the name provided.
   static int Number(const char* name);
-
-  struct RegisterAlias {
-    int reg;
-    const char* name;
-  };
 
  private:
   static const char* names_[kNumRegisters];
-  static const RegisterAlias aliases_[];
 };
 
 // Helper functions for converting between FP register numbers and names.
-class FPRegisters {
+class DoubleRegisters {
  public:
-  // Return the name of the register.
-  static const char* Name(int reg);
-
   // Lookup the register number for the name provided.
   static int Number(const char* name);
 
  private:
-  static const char* names_[kNumFPRegisters];
+  static const char* names_[kNumDoubleRegisters];
 };
-}
-}  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_PPC_CONSTANTS_PPC_H_

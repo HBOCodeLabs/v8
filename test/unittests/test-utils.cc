@@ -4,30 +4,20 @@
 
 #include "test/unittests/test-utils.h"
 
+#include "include/libplatform/libplatform.h"
 #include "src/base/platform/time.h"
-#include "src/debug.h"
+#include "src/debug/debug.h"
 #include "src/flags.h"
 #include "src/isolate.h"
+#include "src/v8.h"
 
 namespace v8 {
 
-class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
- public:
-  virtual void* Allocate(size_t length) {
-    void* data = AllocateUninitialized(length);
-    return data == NULL ? data : memset(data, 0, length);
-  }
-  virtual void* AllocateUninitialized(size_t length) { return malloc(length); }
-  virtual void Free(void* data, size_t) { free(data); }
-};
-
+// static
+v8::ArrayBuffer::Allocator* TestWithIsolate::array_buffer_allocator_ = nullptr;
 
 // static
-ArrayBufferAllocator* TestWithIsolate::array_buffer_allocator_ = NULL;
-
-// static
-Isolate* TestWithIsolate::isolate_ = NULL;
-
+Isolate* TestWithIsolate::isolate_ = nullptr;
 
 TestWithIsolate::TestWithIsolate()
     : isolate_scope_(isolate()), handle_scope_(isolate()) {}
@@ -41,7 +31,7 @@ void TestWithIsolate::SetUpTestCase() {
   Test::SetUpTestCase();
   EXPECT_EQ(NULL, isolate_);
   v8::Isolate::CreateParams create_params;
-  array_buffer_allocator_ = new ArrayBufferAllocator;
+  array_buffer_allocator_ = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
   create_params.array_buffer_allocator = array_buffer_allocator_;
   isolate_ = v8::Isolate::New(create_params);
   EXPECT_TRUE(isolate_ != NULL);
@@ -51,6 +41,9 @@ void TestWithIsolate::SetUpTestCase() {
 // static
 void TestWithIsolate::TearDownTestCase() {
   ASSERT_TRUE(isolate_ != NULL);
+  v8::Platform* platform = internal::V8::GetCurrentPlatform();
+  ASSERT_TRUE(platform != NULL);
+  while (platform::PumpMessageLoop(platform, isolate_)) continue;
   isolate_->Dispose();
   isolate_ = NULL;
   delete array_buffer_allocator_;
@@ -75,7 +68,7 @@ inline int64_t GetRandomSeedFromFlag(int random_seed) {
 }  // namespace
 
 TestWithRandomNumberGenerator::TestWithRandomNumberGenerator()
-    : rng_(GetRandomSeedFromFlag(internal::FLAG_random_seed)) {}
+    : rng_(GetRandomSeedFromFlag(::v8::internal::FLAG_random_seed)) {}
 
 
 TestWithRandomNumberGenerator::~TestWithRandomNumberGenerator() {}

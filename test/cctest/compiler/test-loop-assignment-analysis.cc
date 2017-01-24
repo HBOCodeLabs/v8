@@ -2,14 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/ast/scopes.h"
+#include "src/compilation-info.h"
 #include "src/compiler/ast-loop-assignment-analyzer.h"
-#include "src/parser.h"
-#include "src/rewriter.h"
-#include "src/scopes.h"
+#include "src/parsing/parse-info.h"
+#include "src/parsing/parser.h"
+#include "src/parsing/rewriter.h"
 #include "test/cctest/cctest.h"
 
-using namespace v8::internal;
-using namespace v8::internal::compiler;
+namespace v8 {
+namespace internal {
+namespace compiler {
 
 namespace {
 const int kBufferSize = 1024;
@@ -30,13 +33,13 @@ struct TestHelper : public HandleAndZoneScope {
   void CheckLoopAssignedCount(int expected, const char* var_name) {
     // TODO(titzer): don't scope analyze every single time.
     ParseInfo parse_info(main_zone(), function);
-    CompilationInfo info(&parse_info);
+    CompilationInfo info(&parse_info, function);
 
     CHECK(Parser::ParseStatic(&parse_info));
     CHECK(Rewriter::Rewrite(&parse_info));
-    CHECK(Scope::Analyze(&parse_info));
+    DeclarationScope::Analyze(&parse_info, AnalyzeMode::kRegular);
 
-    Scope* scope = info.function()->scope();
+    DeclarationScope* scope = info.literal()->scope();
     AstValueFactory* factory = parse_info.ast_value_factory();
     CHECK(scope);
 
@@ -51,7 +54,7 @@ struct TestHelper : public HandleAndZoneScope {
     i::Variable* var = scope->Lookup(name);
     CHECK(var);
 
-    if (var->location() == Variable::UNALLOCATED) {
+    if (var->location() == VariableLocation::UNALLOCATED) {
       CHECK_EQ(0, expected);
     } else {
       CHECK(var->IsStackAllocated());
@@ -59,7 +62,7 @@ struct TestHelper : public HandleAndZoneScope {
     }
   }
 };
-}
+}  // namespace
 
 
 TEST(SimpleLoop1) {
@@ -293,3 +296,7 @@ TEST(NestedLoops3c) {
   f.CheckLoopAssignedCount(5, "z");
   f.CheckLoopAssignedCount(0, "w");
 }
+
+}  // namespace compiler
+}  // namespace internal
+}  // namespace v8

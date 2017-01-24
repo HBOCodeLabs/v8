@@ -9,7 +9,8 @@ var exception = null;
 var break_count = 0;
 
 var expected_values =
-  [ReferenceError, undefined, 0, 0, 0, 0, 1, ReferenceError, ReferenceError];
+  [ReferenceError, undefined, 0, 0, 0, 0, 1,
+   ReferenceError, ReferenceError];
 
 function listener(event, exec_state, event_data, data) {
   try {
@@ -39,12 +40,11 @@ function listener(event, exec_state, event_data, data) {
         assertTrue(v instanceof ReferenceError);
       } else {
         assertSame(expected_values[break_count], v);
-
       }
       ++break_count;
 
       if (break_count !== expected_breaks) {
-        exec_state.prepareStep(Debug.StepAction.StepIn, 1);
+        exec_state.prepareStep(Debug.StepAction.StepIn);
         print("Next step prepared");
       }
     }
@@ -63,8 +63,8 @@ var sum = 0;
   debugger; // Break 0.
 
   for (let i=0; // Break 1.
-       i < 1;   // Break 2. // Break 5. // Break 6.
-       i++) {
+       i < 1;   // Break 2.  // Break 6.
+       i++) {   // Break 5.
     let key = i; // Break 3.
     sum += key;   // Break 4.
   }

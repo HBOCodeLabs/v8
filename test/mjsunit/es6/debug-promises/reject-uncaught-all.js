@@ -18,7 +18,7 @@ var p = new Promise(function(resolve, reject) {
   resolve();
 });
 
-var q = p.chain(
+var q = p.then(
   function() {
     log.push("reject");
     return Promise.reject(new Error("uncaught reject"));
@@ -33,8 +33,8 @@ function listener(event, exec_state, event_data, data) {
       assertTrue(event_data.promise() instanceof Promise);
       assertSame(q, event_data.promise());
       assertTrue(event_data.uncaught());
-      // All of the frames on the stack are from native Javascript.
-      assertEquals(0, exec_state.frameCount());
+      // The frame comes from the Promise.reject call
+      assertNotNull(/Promise\.reject/.exec(event_data.sourceLineText()));
     }
   } catch (e) {
     %AbortJS(e + "\n" + e.stack);
@@ -60,10 +60,7 @@ function testDone(iteration) {
     }
   }
 
-  // Run testDone through the Object.observe processing loop.
-  var dummy = {};
-  Object.observe(dummy, checkResult);
-  dummy.dummy = dummy;
+  %EnqueueMicrotask(checkResult);
 }
 
 testDone(0);

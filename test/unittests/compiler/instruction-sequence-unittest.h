@@ -5,6 +5,8 @@
 #ifndef V8_UNITTESTS_COMPILER_INSTRUCTION_SEQUENCE_UNITTEST_H_
 #define V8_UNITTESTS_COMPILER_INSTRUCTION_SEQUENCE_UNITTEST_H_
 
+#include <memory>
+
 #include "src/compiler/instruction.h"
 #include "test/unittests/test-utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -15,7 +17,7 @@ namespace compiler {
 
 class InstructionSequenceTest : public TestWithIsolateAndZone {
  public:
-  static const int kDefaultNRegs = 4;
+  static const int kDefaultNRegs = 8;
   static const int kNoValue = kMinInt;
 
   typedef RpoNumber Rpo;
@@ -36,6 +38,7 @@ class InstructionSequenceTest : public TestWithIsolateAndZone {
     kFixedRegister,
     kSlot,
     kFixedSlot,
+    kExplicit,
     kImmediate,
     kNone,
     kConstant,
@@ -56,6 +59,11 @@ class InstructionSequenceTest : public TestWithIsolateAndZone {
   };
 
   static TestOperand Same() { return TestOperand(kSameAsFirst, VReg()); }
+
+  static TestOperand ExplicitReg(int index) {
+    TestOperandType type = kExplicit;
+    return TestOperand(type, VReg(), index);
+  }
 
   static TestOperand Reg(VReg vreg, int index = kNoValue) {
     TestOperandType type = kRegister;
@@ -126,7 +134,7 @@ class InstructionSequenceTest : public TestWithIsolateAndZone {
 
   void StartLoop(int loop_blocks);
   void EndLoop();
-  void StartBlock();
+  void StartBlock(bool deferred = false);
   Instruction* EndBlock(BlockCompletion completion = FallThrough());
 
   TestOperand Imm(int32_t imm = 0);
@@ -203,7 +211,7 @@ class InstructionSequenceTest : public TestWithIsolateAndZone {
   InstructionOperand* ConvertInputs(size_t input_size, TestOperand* inputs);
   InstructionOperand ConvertInputOp(TestOperand op);
   InstructionOperand ConvertOutputOp(VReg vreg, TestOperand op);
-  InstructionBlock* NewBlock();
+  InstructionBlock* NewBlock(bool deferred = false);
   void WireBlock(size_t block_offset, int jump_offset);
 
   Instruction* Emit(InstructionCode code, size_t outputs_size = 0,
@@ -223,7 +231,7 @@ class InstructionSequenceTest : public TestWithIsolateAndZone {
   typedef std::map<int, const Instruction*> Instructions;
   typedef std::vector<BlockCompletion> Completions;
 
-  SmartPointer<RegisterConfiguration> config_;
+  std::unique_ptr<RegisterConfiguration> config_;
   InstructionSequence* sequence_;
   int num_general_registers_;
   int num_double_registers_;
@@ -235,6 +243,8 @@ class InstructionSequenceTest : public TestWithIsolateAndZone {
   LoopBlocks loop_blocks_;
   InstructionBlock* current_block_;
   bool block_returns_;
+
+  DISALLOW_COPY_AND_ASSIGN(InstructionSequenceTest);
 };
 
 }  // namespace compiler

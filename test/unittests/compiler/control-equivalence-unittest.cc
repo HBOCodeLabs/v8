@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/bit-vector.h"
 #include "src/compiler/control-equivalence.h"
+#include "src/bit-vector.h"
 #include "src/compiler/graph-visualizer.h"
 #include "src/compiler/node-properties.h"
-#include "src/zone-containers.h"
+#include "src/compiler/source-position.h"
+#include "src/zone/zone-containers.h"
 #include "test/unittests/compiler/graph-unittest.h"
 
 namespace v8 {
@@ -30,7 +31,8 @@ class ControlEquivalenceTest : public GraphTest {
     graph()->SetEnd(graph()->NewNode(common()->End(1), node));
     if (FLAG_trace_turbo) {
       OFStream os(stdout);
-      os << AsDOT(*graph());
+      SourcePositionTable table(graph());
+      os << AsJSON(*graph(), &table);
     }
     ControlEquivalence equivalence(zone(), graph());
     equivalence.Run(node);
@@ -41,7 +43,7 @@ class ControlEquivalenceTest : public GraphTest {
   }
 
   bool IsEquivalenceClass(size_t length, Node** nodes) {
-    BitVector in_class(graph()->NodeCount(), zone());
+    BitVector in_class(static_cast<int>(graph()->NodeCount()), zone());
     size_t expected_class = classes_[nodes[0]->id()];
     for (size_t i = 0; i < length; ++i) {
       in_class.Add(nodes[i]->id());
@@ -68,6 +70,10 @@ class ControlEquivalenceTest : public GraphTest {
 
   Node* IfFalse(Node* control) {
     return Store(graph()->NewNode(common()->IfFalse(), control));
+  }
+
+  Node* Merge1(Node* control) {
+    return Store(graph()->NewNode(common()->Merge(1), control));
   }
 
   Node* Merge2(Node* control1, Node* control2) {
@@ -107,10 +113,10 @@ TEST_F(ControlEquivalenceTest, Empty1) {
 
 TEST_F(ControlEquivalenceTest, Empty2) {
   Node* start = graph()->start();
-  Node* end = End(start);
-  ComputeEquivalence(end);
+  Node* merge1 = Merge1(start);
+  ComputeEquivalence(merge1);
 
-  ASSERT_EQUIVALENCE(start, end);
+  ASSERT_EQUIVALENCE(start, merge1);
 }
 
 

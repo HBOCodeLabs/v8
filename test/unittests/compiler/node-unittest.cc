@@ -7,7 +7,9 @@
 #include "test/unittests/test-utils.h"
 #include "testing/gmock-support.h"
 
+using testing::Contains;
 using testing::ElementsAre;
+using testing::ElementsAreArray;
 using testing::UnorderedElementsAre;
 
 namespace v8 {
@@ -32,7 +34,7 @@ const Operator kOp2(kOpcode2, Operator::kNoProperties, "Op2", 2, 0, 0, 1, 0, 0);
 
 TEST_F(NodeTest, New) {
   Node* const node = Node::New(zone(), 1, &kOp0, 0, nullptr, false);
-  EXPECT_EQ(1, node->id());
+  EXPECT_EQ(1U, node->id());
   EXPECT_EQ(0, node->UseCount());
   EXPECT_TRUE(node->uses().empty());
   EXPECT_EQ(0, node->InputCount());
@@ -252,6 +254,10 @@ TEST_F(NodeTest, BigNodes) {
     for (int i = 0; i < size; i++) {
       EXPECT_EQ(inputs[i], node->InputAt(i));
     }
+
+    EXPECT_THAT(n0->uses(), Contains(node));
+    EXPECT_THAT(n1->uses(), Contains(node));
+    EXPECT_THAT(node->inputs(), ElementsAreArray(inputs, size));
   }
 }
 

@@ -5,7 +5,7 @@
 #ifndef V8_V8_DEBUG_H_
 #define V8_V8_DEBUG_H_
 
-#include "v8.h"
+#include "v8.h"  // NOLINT(build/include)
 
 /**
  * Debugger support for the V8 JavaScript engine.
@@ -18,12 +18,10 @@ enum DebugEvent {
   Exception = 2,
   NewFunction = 3,
   BeforeCompile = 4,
-  AfterCompile  = 5,
+  AfterCompile = 5,
   CompileError = 6,
-  PromiseEvent = 7,
-  AsyncTaskEvent = 8,
+  AsyncTaskEvent = 7,
 };
-
 
 class V8_EXPORT Debug {
  public:
@@ -60,20 +58,20 @@ class V8_EXPORT Debug {
      * callbacks as their content becomes invalid. These objects are from the
      * debugger event that started the debug message loop.
      */
-    virtual Handle<Object> GetExecutionState() const = 0;
-    virtual Handle<Object> GetEventData() const = 0;
+    virtual Local<Object> GetExecutionState() const = 0;
+    virtual Local<Object> GetEventData() const = 0;
 
     /**
      * Get the debugger protocol JSON.
      */
-    virtual Handle<String> GetJSON() const = 0;
+    virtual Local<String> GetJSON() const = 0;
 
     /**
      * Get the context active when the debug event happened. Note this is not
      * the current active context as the JavaScript part of the debugger is
      * running in its own context which is entered at this point.
      */
-    virtual Handle<Context> GetEventContext() const = 0;
+    virtual Local<Context> GetEventContext() const = 0;
 
     /**
      * Client data passed with the corresponding request if any. This is the
@@ -104,21 +102,21 @@ class V8_EXPORT Debug {
      * Access to execution state and event data of the debug event. Don't store
      * these cross callbacks as their content becomes invalid.
      */
-    virtual Handle<Object> GetExecutionState() const = 0;
-    virtual Handle<Object> GetEventData() const = 0;
+    virtual Local<Object> GetExecutionState() const = 0;
+    virtual Local<Object> GetEventData() const = 0;
 
     /**
      * Get the context active when the debug event happened. Note this is not
      * the current active context as the JavaScript part of the debugger is
      * running in its own context which is entered at this point.
      */
-    virtual Handle<Context> GetEventContext() const = 0;
+    virtual Local<Context> GetEventContext() const = 0;
 
     /**
      * Client data passed with the corresponding callback when it was
      * registered.
      */
-    virtual Handle<Value> GetCallbackData() const = 0;
+    virtual Local<Value> GetCallbackData() const = 0;
 
     /**
      * Client data passed to DebugBreakForCommand function. The
@@ -126,6 +124,8 @@ class V8_EXPORT Debug {
      * there is no message handler.
      */
     virtual ClientData* GetClientData() const = 0;
+
+    virtual Isolate* GetIsolate() const = 0;
 
     virtual ~EventDetails() {}
   };
@@ -155,8 +155,8 @@ class V8_EXPORT Debug {
    */
   typedef void (*DebugMessageDispatchHandler)();
 
-  static bool SetDebugEventListener(EventCallback that,
-                                    Handle<Value> data = Handle<Value>());
+  static bool SetDebugEventListener(Isolate* isolate, EventCallback that,
+                                    Local<Value> data = Local<Value>());
 
   // Schedule a debugger break to happen when JavaScript code is run
   // in the given isolate.
@@ -170,7 +170,7 @@ class V8_EXPORT Debug {
   static bool CheckDebugBreak(Isolate* isolate);
 
   // Message based interface. The message protocol is JSON.
-  static void SetMessageHandler(MessageHandler handler);
+  static void SetMessageHandler(Isolate* isolate, MessageHandler handler);
 
   static void SendCommand(Isolate* isolate,
                           const uint16_t* command, int length,
@@ -194,22 +194,16 @@ class V8_EXPORT Debug {
   *   }
   * \endcode
   */
-  static V8_DEPRECATE_SOON(
-      "Use maybe version",
-      Local<Value> Call(v8::Handle<v8::Function> fun,
-                        Handle<Value> data = Handle<Value>()));
   // TODO(dcarney): data arg should be a MaybeLocal
   static MaybeLocal<Value> Call(Local<Context> context,
-                                v8::Handle<v8::Function> fun,
-                                Handle<Value> data = Handle<Value>());
+                                v8::Local<v8::Function> fun,
+                                Local<Value> data = Local<Value>());
 
   /**
    * Returns a mirror object for the given object.
    */
-  static V8_DEPRECATE_SOON("Use maybe version",
-                           Local<Value> GetMirror(v8::Handle<v8::Value> obj));
   static MaybeLocal<Value> GetMirror(Local<Context> context,
-                                     v8::Handle<v8::Value> obj);
+                                     v8::Local<v8::Value> obj);
 
   /**
    * Makes V8 process all pending debug messages.
@@ -242,7 +236,7 @@ class V8_EXPORT Debug {
    * "Evaluate" debug command behavior currently is not specified in scope
    * of this method.
    */
-  static void ProcessDebugMessages();
+  static void ProcessDebugMessages(Isolate* isolate);
 
   /**
    * Debugger is running in its own context which is entered while debugger
@@ -251,8 +245,13 @@ class V8_EXPORT Debug {
    * to change. The Context exists only when the debugger is active, i.e. at
    * least one DebugEventListener or MessageHandler is set.
    */
-  static Local<Context> GetDebugContext();
+  static Local<Context> GetDebugContext(Isolate* isolate);
 
+  /**
+   * While in the debug context, this method returns the top-most non-debug
+   * context, if it exists.
+   */
+  static MaybeLocal<Context> GetDebuggedContext(Isolate* isolate);
 
   /**
    * Enable/disable LiveEdit functionality for the given Isolate
@@ -268,6 +267,14 @@ class V8_EXPORT Debug {
    */
   static MaybeLocal<Array> GetInternalProperties(Isolate* isolate,
                                                  Local<Value> value);
+
+  /**
+   * Defines if the ES2015 tail call elimination feature is enabled or not.
+   * The change of this flag triggers deoptimization of all functions that
+   * contain calls at tail position.
+   */
+  static bool IsTailCallEliminationEnabled(Isolate* isolate);
+  static void SetTailCallEliminationEnabled(Isolate* isolate, bool enabled);
 };
 
 

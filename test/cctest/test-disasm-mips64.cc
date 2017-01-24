@@ -30,7 +30,7 @@
 
 #include "src/v8.h"
 
-#include "src/debug.h"
+#include "src/debug/debug.h"
 #include "src/disasm.h"
 #include "src/disassembler.h"
 #include "src/macro-assembler.h"
@@ -38,11 +38,17 @@
 
 using namespace v8::internal;
 
+bool prev_instr_compact_branch = false;
 
 bool DisassembleAndCompare(byte* pc, const char* compare_string) {
   disasm::NameConverter converter;
   disasm::Disassembler disasm(converter);
   EmbeddedVector<char, 128> disasm_buffer;
+
+  if (prev_instr_compact_branch) {
+    disasm.InstructionDecode(disasm_buffer, pc);
+    pc += 4;
+  }
 
   disasm.InstructionDecode(disasm_buffer, pc);
 
@@ -89,6 +95,58 @@ bool DisassembleAndCompare(byte* pc, const char* compare_string) {
 #define VERIFY_RUN() \
 if (failure) { \
     V8_Fatal(__FILE__, __LINE__, "MIPS Disassembler tests failed.\n"); \
+  }
+
+#define COMPARE_PC_REL_COMPACT(asm_, compare_string, offset)                   \
+  {                                                                            \
+    int pc_offset = assm.pc_offset();                                          \
+    byte *progcounter = &buffer[pc_offset];                                    \
+    char str_with_address[100];                                                \
+    prev_instr_compact_branch = assm.IsPrevInstrCompactBranch();               \
+    if (prev_instr_compact_branch) {                                           \
+      snprintf(str_with_address, sizeof(str_with_address), "%s -> %p",         \
+               compare_string,                                                 \
+               static_cast<void *>(progcounter + 8 + (offset * 4)));           \
+    } else {                                                                   \
+      snprintf(str_with_address, sizeof(str_with_address), "%s -> %p",         \
+               compare_string,                                                 \
+               static_cast<void *>(progcounter + 4 + (offset * 4)));           \
+    }                                                                          \
+    assm.asm_;                                                                 \
+    if (!DisassembleAndCompare(progcounter, str_with_address)) failure = true; \
+  }
+
+#define COMPARE_PC_REL(asm_, compare_string, offset)                           \
+  {                                                                            \
+    int pc_offset = assm.pc_offset();                                          \
+    byte *progcounter = &buffer[pc_offset];                                    \
+    char str_with_address[100];                                                \
+    snprintf(str_with_address, sizeof(str_with_address), "%s -> %p",           \
+             compare_string, static_cast<void *>(progcounter + (offset * 4))); \
+    assm.asm_;                                                                 \
+    if (!DisassembleAndCompare(progcounter, str_with_address)) failure = true; \
+  }
+
+#define COMPARE_PC_JUMP(asm_, compare_string, target)                          \
+  {                                                                            \
+    int pc_offset = assm.pc_offset();                                          \
+    byte *progcounter = &buffer[pc_offset];                                    \
+    char str_with_address[100];                                                \
+    int instr_index = (target >> 2) & kImm26Mask;                              \
+    snprintf(                                                                  \
+        str_with_address, sizeof(str_with_address), "%s %p -> %p",             \
+        compare_string, reinterpret_cast<void *>(target),                      \
+        reinterpret_cast<void *>(((uint64_t)(progcounter + 1) & ~0xfffffff) |  \
+                                 (instr_index << 2)));                         \
+    assm.asm_;                                                                 \
+    if (!DisassembleAndCompare(progcounter, str_with_address)) failure = true; \
+  }
+
+#define GET_PC_REGION(pc_region)                                         \
+  {                                                                      \
+    int pc_offset = assm.pc_offset();                                    \
+    byte *progcounter = &buffer[pc_offset];                              \
+    pc_region = reinterpret_cast<int64_t>(progcounter + 4) & ~0xfffffff; \
   }
 
 
@@ -279,38 +337,6 @@ TEST(Type0) {
             "0064109f       ddivu  v0, v1, a0");
     COMPARE(dmodu(v0, v1, a0),
             "006410df       dmodu  v0, v1, a0");
-
-    COMPARE(bovc(a0, a0, static_cast<int16_t>(0)),
-            "20840000       bovc  a0, a0, 0");
-    COMPARE(bovc(a1, a0, static_cast<int16_t>(0)),
-            "20a40000       bovc  a1, a0, 0");
-    COMPARE(bovc(a1, a0, 32767),
-            "20a47fff       bovc  a1, a0, 32767");
-    COMPARE(bovc(a1, a0, -32768),
-            "20a48000       bovc  a1, a0, -32768");
-
-    COMPARE(bnvc(a0, a0, static_cast<int16_t>(0)),
-            "60840000       bnvc  a0, a0, 0");
-    COMPARE(bnvc(a1, a0, static_cast<int16_t>(0)),
-            "60a40000       bnvc  a1, a0, 0");
-    COMPARE(bnvc(a1, a0, 32767),
-            "60a47fff       bnvc  a1, a0, 32767");
-    COMPARE(bnvc(a1, a0, -32768),
-            "60a48000       bnvc  a1, a0, -32768");
-
-    COMPARE(beqzc(a0, 0),
-            "d8800000       beqzc   a0, 0x0");
-    COMPARE(beqzc(a0, 0xfffff),                   // 0x0fffff ==  1048575.
-            "d88fffff       beqzc   a0, 0xfffff");
-    COMPARE(beqzc(a0, 0x100000),                  // 0x100000 == -1048576.
-            "d8900000       beqzc   a0, 0x100000");
-
-    COMPARE(bnezc(a0, 0),
-            "f8800000       bnezc   a0, 0x0");
-    COMPARE(bnezc(a0, 0xfffff),                   // 0x0fffff ==  1048575.
-            "f88fffff       bnezc   a0, 0xfffff");
-    COMPARE(bnezc(a0, 0x100000),                  // 0x100000 == -1048576.
-            "f8900000       bnezc   a0, 0x100000");
   }
 
   COMPARE(addiu(a0, a1, 0x0),
@@ -385,6 +411,20 @@ TEST(Type0) {
           "3c040001       lui     a0, 0x1");
   COMPARE(lui(v0, 0xffff),
           "3c02ffff       lui     v0, 0xffff");
+
+  if (kArchVariant == (kMips64r6)) {
+    COMPARE(aui(a0, a1, 0x1), "3ca40001       aui     a0, a1, 0x1");
+    COMPARE(aui(v0, v1, 0xffff), "3c62ffff       aui     v0, v1, 0xffff");
+
+    COMPARE(daui(a0, a1, 0x1), "74a40001       daui    a0, a1, 0x1");
+    COMPARE(daui(v0, v1, 0xffff), "7462ffff       daui    v0, v1, 0xffff");
+
+    COMPARE(dahi(a0, 0x1), "04860001       dahi    a0, 0x1");
+    COMPARE(dahi(v0, 0xffff), "0446ffff       dahi    v0, 0xffff");
+
+    COMPARE(dati(a0, 0x1), "049e0001       dati    a0, 0x1");
+    COMPARE(dati(v0, 0xffff), "045effff       dati    v0, 0xffff");
+  }
 
   COMPARE(sll(a0, a1, 0),
           "00052000       sll     a0, a1, 0");
@@ -488,41 +528,28 @@ TEST(Type0) {
   COMPARE(dsrav(v0, v1, fp),
           "03c31017       dsrav   v0, v1, fp");
 
-  if (kArchVariant == kMips64r2) {
-    COMPARE(rotr(a0, a1, 0),
-            "00252002       rotr    a0, a1, 0");
-    COMPARE(rotr(s0, s1, 8),
-            "00318202       rotr    s0, s1, 8");
-    COMPARE(rotr(a6, a7, 24),
-            "002b5602       rotr    a6, a7, 24");
-    COMPARE(rotr(v0, v1, 31),
-            "002317c2       rotr    v0, v1, 31");
-    COMPARE(drotr(a0, a1, 0),
-            "0025203a       drotr   a0, a1, 0");
-    COMPARE(drotr(s0, s1, 8),
-            "0031823a       drotr   s0, s1, 8");
-    COMPARE(drotr(a6, a7, 24),
-            "002b563a       drotr   a6, a7, 24");
-    COMPARE(drotr(v0, v1, 31),
-            "002317fa       drotr   v0, v1, 31");
+  COMPARE(rotr(a0, a1, 0), "00252002       rotr    a0, a1, 0");
+  COMPARE(rotr(s0, s1, 8), "00318202       rotr    s0, s1, 8");
+  COMPARE(rotr(a6, a7, 24), "002b5602       rotr    a6, a7, 24");
+  COMPARE(rotr(v0, v1, 31), "002317c2       rotr    v0, v1, 31");
+  COMPARE(drotr(a0, a1, 0), "0025203a       drotr   a0, a1, 0");
+  COMPARE(drotr(s0, s1, 8), "0031823a       drotr   s0, s1, 8");
+  COMPARE(drotr(a6, a7, 24), "002b563a       drotr   a6, a7, 24");
+  COMPARE(drotr(v0, v1, 31), "002317fa       drotr   v0, v1, 31");
 
-    COMPARE(rotrv(a0, a1, a2),
-            "00c52046       rotrv   a0, a1, a2");
-    COMPARE(rotrv(s0, s1, s2),
-            "02518046       rotrv   s0, s1, s2");
-    COMPARE(rotrv(a6, a7, t0),
-            "018b5046       rotrv   a6, a7, t0");
-    COMPARE(rotrv(v0, v1, fp),
-            "03c31046       rotrv   v0, v1, fp");
-    COMPARE(drotrv(a0, a1, a2),
-            "00c52056       drotrv  a0, a1, a2");
-    COMPARE(drotrv(s0, s1, s2),
-            "02518056       drotrv  s0, s1, s2");
-    COMPARE(drotrv(a6, a7, t0),
-            "018b5056       drotrv  a6, a7, t0");
-    COMPARE(drotrv(v0, v1, fp),
-            "03c31056       drotrv  v0, v1, fp");
-  }
+  COMPARE(drotr32(a0, a1, 0), "0025203e       drotr32 a0, a1, 0");
+  COMPARE(drotr32(s0, s1, 8), "0031823e       drotr32 s0, s1, 8");
+  COMPARE(drotr32(a6, a7, 24), "002b563e       drotr32 a6, a7, 24");
+  COMPARE(drotr32(v0, v1, 31), "002317fe       drotr32 v0, v1, 31");
+
+  COMPARE(rotrv(a0, a1, a2), "00c52046       rotrv   a0, a1, a2");
+  COMPARE(rotrv(s0, s1, s2), "02518046       rotrv   s0, s1, s2");
+  COMPARE(rotrv(a6, a7, t0), "018b5046       rotrv   a6, a7, t0");
+  COMPARE(rotrv(v0, v1, fp), "03c31046       rotrv   v0, v1, fp");
+  COMPARE(drotrv(a0, a1, a2), "00c52056       drotrv  a0, a1, a2");
+  COMPARE(drotrv(s0, s1, s2), "02518056       drotrv  s0, s1, s2");
+  COMPARE(drotrv(a6, a7, t0), "018b5056       drotrv  a6, a7, t0");
+  COMPARE(drotrv(v0, v1, fp), "03c31056       drotrv  v0, v1, fp");
 
   COMPARE(break_(0),
           "0000000d       break, code: 0x00000 (0)");
@@ -656,6 +683,30 @@ TEST(Type0) {
             "70621020       clz     v0, v1");
   }
 
+  COMPARE(seb(a0, a1), "7c052420       seb     a0, a1");
+  COMPARE(seb(s6, s7), "7c17b420       seb     s6, s7");
+  COMPARE(seb(v0, v1), "7c031420       seb     v0, v1");
+
+  COMPARE(seh(a0, a1), "7c052620       seh     a0, a1");
+  COMPARE(seh(s6, s7), "7c17b620       seh     s6, s7");
+  COMPARE(seh(v0, v1), "7c031620       seh     v0, v1");
+
+  COMPARE(wsbh(a0, a1), "7c0520a0       wsbh    a0, a1");
+  COMPARE(wsbh(s6, s7), "7c17b0a0       wsbh    s6, s7");
+  COMPARE(wsbh(v0, v1), "7c0310a0       wsbh    v0, v1");
+
+  COMPARE(dsbh(a0, a1), "7c0520a4       dsbh    a0, a1");
+  COMPARE(dsbh(s6, s7), "7c17b0a4       dsbh    s6, s7");
+  COMPARE(dsbh(v0, v1), "7c0310a4       dsbh    v0, v1");
+
+  COMPARE(dins_(a0, a1, 31, 1), "7ca4ffc7       dins    a0, a1, 31, 1");
+  COMPARE(dins_(s6, s7, 30, 2), "7ef6ff87       dins    s6, s7, 30, 2");
+  COMPARE(dins_(v0, v1, 0, 32), "7c62f807       dins    v0, v1, 0, 32");
+
+  COMPARE(dshd(a0, a1), "7c052164       dshd    a0, a1");
+  COMPARE(dshd(s6, s7), "7c17b164       dshd    s6, s7");
+  COMPARE(dshd(v0, v1), "7c031164       dshd    v0, v1");
+
   COMPARE(ins_(a0, a1, 31, 1),
           "7ca4ffc4       ins     a0, a1, 31, 1");
   COMPARE(ins_(s6, s7, 30, 2),
@@ -684,6 +735,82 @@ TEST(Type0) {
 
   COMPARE(div_s(f2, f4, f6), "46062083       div.s   f2, f4, f6");
   COMPARE(div_d(f2, f4, f6), "46262083       div.d   f2, f4, f6");
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(align(v0, a0, a1, 0), "7c851220       align  v0, a0, a1, 0");
+    COMPARE(align(v0, a0, a1, 1), "7c851260       align  v0, a0, a1, 1");
+    COMPARE(align(v0, a0, a1, 2), "7c8512a0       align  v0, a0, a1, 2");
+    COMPARE(align(v0, a0, a1, 3), "7c8512e0       align  v0, a0, a1, 3");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(dalign(v0, a0, a1, 0), "7c851224       dalign  v0, a0, a1, 0");
+    COMPARE(dalign(v0, a0, a1, 1), "7c851264       dalign  v0, a0, a1, 1");
+    COMPARE(dalign(v0, a0, a1, 2), "7c8512a4       dalign  v0, a0, a1, 2");
+    COMPARE(dalign(v0, a0, a1, 3), "7c8512e4       dalign  v0, a0, a1, 3");
+    COMPARE(dalign(v0, a0, a1, 4), "7c851324       dalign  v0, a0, a1, 4");
+    COMPARE(dalign(v0, a0, a1, 5), "7c851364       dalign  v0, a0, a1, 5");
+    COMPARE(dalign(v0, a0, a1, 6), "7c8513a4       dalign  v0, a0, a1, 6");
+    COMPARE(dalign(v0, a0, a1, 7), "7c8513e4       dalign  v0, a0, a1, 7");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(aluipc(v0, 0), "ec5f0000       aluipc  v0, 0");
+    COMPARE(aluipc(v0, 1), "ec5f0001       aluipc  v0, 1");
+    COMPARE(aluipc(v0, 32767), "ec5f7fff       aluipc  v0, 32767");
+    COMPARE(aluipc(v0, -32768), "ec5f8000       aluipc  v0, -32768");
+    COMPARE(aluipc(v0, -1), "ec5fffff       aluipc  v0, -1");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(auipc(t8, 0), "ef1e0000       auipc   t8, 0");
+    COMPARE(auipc(t8, 1), "ef1e0001       auipc   t8, 1");
+    COMPARE(auipc(t8, 32767), "ef1e7fff       auipc   t8, 32767");
+    COMPARE(auipc(t8, -32768), "ef1e8000       auipc   t8, -32768");
+    COMPARE(auipc(t8, -1), "ef1effff       auipc   t8, -1");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(lwpc(a5, 0), "ed280000       lwpc    a5, 0");
+    COMPARE(lwpc(a5, 4), "ed280004       lwpc    a5, 4");
+    COMPARE(lwpc(a5, -4), "ed2ffffc       lwpc    a5, -4");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(lwupc(a0, -262144), "ec940000       lwupc   a0, -262144");
+    COMPARE(lwupc(a0, -1), "ec97ffff       lwupc   a0, -1");
+    COMPARE(lwupc(a0, 0), "ec900000       lwupc   a0, 0");
+    COMPARE(lwupc(a0, 1), "ec900001       lwupc   a0, 1");
+    COMPARE(lwupc(a0, 262143), "ec93ffff       lwupc   a0, 262143");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(jic(t0, 16), "d80c0010       jic     t0, 16");
+    COMPARE(jic(t0, 4), "d80c0004       jic     t0, 4");
+    COMPARE(jic(t0, -32), "d80cffe0       jic     t0, -32");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(ldpc(v0, 256), "ec580100       ldpc    v0, 256");
+    COMPARE(ldpc(a0, -1), "ec9bffff       ldpc    a0, -1");
+    COMPARE(ldpc(a1, 0), "ecb80000       ldpc    a1, 0");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(addiupc(a0, 262143), "ec83ffff       addiupc a0, 262143");
+    COMPARE(addiupc(a0, -1), "ec87ffff       addiupc a0, -1");
+    COMPARE(addiupc(v0, 0), "ec400000       addiupc v0, 0");
+    COMPARE(addiupc(s1, 1), "ee200001       addiupc s1, 1");
+    COMPARE(addiupc(a0, -262144), "ec840000       addiupc a0, -262144");
+  }
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE(jialc(a0, -32768), "f8048000       jialc   a0, -32768");
+    COMPARE(jialc(a0, -1), "f804ffff       jialc   a0, -1");
+    COMPARE(jialc(v0, 0), "f8020000       jialc   v0, 0");
+    COMPARE(jialc(s1, 1), "f8110001       jialc   s1, 1");
+    COMPARE(jialc(a0, 32767), "f8047fff       jialc   a0, 32767");
+  }
 
   VERIFY_RUN();
 }
@@ -793,6 +920,253 @@ TEST(Type2) {
 }
 
 
+TEST(Type3) {
+  SET_UP();
+
+  if (kArchVariant == kMips64r6) {
+    COMPARE_PC_REL_COMPACT(bovc(a0, a0, static_cast<int16_t>(0)),
+                           "20840000       bovc  a0, a0, 0", 0);
+    COMPARE_PC_REL_COMPACT(bovc(a1, a0, static_cast<int16_t>(0)),
+                           "20a40000       bovc  a1, a0, 0", 0);
+    COMPARE_PC_REL_COMPACT(bovc(a1, a0, 32767),
+                           "20a47fff       bovc  a1, a0, 32767", 32767);
+    COMPARE_PC_REL_COMPACT(bovc(a1, a0, -32768),
+                           "20a48000       bovc  a1, a0, -32768", -32768);
+
+    COMPARE_PC_REL_COMPACT(bnvc(a0, a0, static_cast<int16_t>(0)),
+                           "60840000       bnvc  a0, a0, 0", 0);
+    COMPARE_PC_REL_COMPACT(bnvc(a1, a0, static_cast<int16_t>(0)),
+                           "60a40000       bnvc  a1, a0, 0", 0);
+    COMPARE_PC_REL_COMPACT(bnvc(a1, a0, 32767),
+                           "60a47fff       bnvc  a1, a0, 32767", 32767);
+    COMPARE_PC_REL_COMPACT(bnvc(a1, a0, -32768),
+                           "60a48000       bnvc  a1, a0, -32768", -32768);
+
+    COMPARE_PC_REL_COMPACT(beqzc(a0, 0), "d8800000       beqzc   a0, 0", 0);
+    COMPARE_PC_REL_COMPACT(beqzc(a0, 1048575),  // 0x0fffff ==  1048575.
+                           "d88fffff       beqzc   a0, 1048575", 1048575);
+    COMPARE_PC_REL_COMPACT(beqzc(a0, -1048576),  // 0x100000 == -1048576.
+                           "d8900000       beqzc   a0, -1048576", -1048576);
+
+    COMPARE_PC_REL_COMPACT(bnezc(a0, 0), "f8800000       bnezc   a0, 0", 0);
+    COMPARE_PC_REL_COMPACT(bnezc(a0, 1048575),  // int21 maximal value.
+                           "f88fffff       bnezc   a0, 1048575", 1048575);
+    COMPARE_PC_REL_COMPACT(bnezc(a0, -1048576),  // int21 minimal value.
+                           "f8900000       bnezc   a0, -1048576", -1048576);
+
+    COMPARE_PC_REL_COMPACT(bc(-33554432), "ca000000       bc      -33554432",
+                           -33554432);
+    COMPARE_PC_REL_COMPACT(bc(-1), "cbffffff       bc      -1", -1);
+    COMPARE_PC_REL_COMPACT(bc(0), "c8000000       bc      0", 0);
+    COMPARE_PC_REL_COMPACT(bc(1), "c8000001       bc      1", 1);
+    COMPARE_PC_REL_COMPACT(bc(33554431), "c9ffffff       bc      33554431",
+                           33554431);
+
+    COMPARE_PC_REL_COMPACT(balc(-33554432), "ea000000       balc    -33554432",
+                           -33554432);
+    COMPARE_PC_REL_COMPACT(balc(-1), "ebffffff       balc    -1", -1);
+    COMPARE_PC_REL_COMPACT(balc(0), "e8000000       balc    0", 0);
+    COMPARE_PC_REL_COMPACT(balc(1), "e8000001       balc    1", 1);
+    COMPARE_PC_REL_COMPACT(balc(33554431), "e9ffffff       balc    33554431",
+                           33554431);
+
+    COMPARE_PC_REL_COMPACT(bgeuc(a0, a1, -32768),
+                           "18858000       bgeuc   a0, a1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bgeuc(a0, a1, -1),
+                           "1885ffff       bgeuc   a0, a1, -1", -1);
+    COMPARE_PC_REL_COMPACT(bgeuc(a0, a1, 1), "18850001       bgeuc   a0, a1, 1",
+                           1);
+    COMPARE_PC_REL_COMPACT(bgeuc(a0, a1, 32767),
+                           "18857fff       bgeuc   a0, a1, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bgezalc(a0, -32768),
+                           "18848000       bgezalc a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bgezalc(a0, -1), "1884ffff       bgezalc a0, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(bgezalc(a0, 1), "18840001       bgezalc a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(bgezalc(a0, 32767),
+                           "18847fff       bgezalc a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(blezalc(a0, -32768),
+                           "18048000       blezalc a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(blezalc(a0, -1), "1804ffff       blezalc a0, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(blezalc(a0, 1), "18040001       blezalc a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(blezalc(a0, 32767),
+                           "18047fff       blezalc a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bltuc(a0, a1, -32768),
+                           "1c858000       bltuc   a0, a1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bltuc(a0, a1, -1),
+                           "1c85ffff       bltuc   a0, a1, -1", -1);
+    COMPARE_PC_REL_COMPACT(bltuc(a0, a1, 1), "1c850001       bltuc   a0, a1, 1",
+                           1);
+    COMPARE_PC_REL_COMPACT(bltuc(a0, a1, 32767),
+                           "1c857fff       bltuc   a0, a1, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bltzalc(a0, -32768),
+                           "1c848000       bltzalc a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bltzalc(a0, -1), "1c84ffff       bltzalc a0, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(bltzalc(a0, 1), "1c840001       bltzalc a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(bltzalc(a0, 32767),
+                           "1c847fff       bltzalc a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bgtzalc(a0, -32768),
+                           "1c048000       bgtzalc a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bgtzalc(a0, -1), "1c04ffff       bgtzalc a0, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(bgtzalc(a0, 1), "1c040001       bgtzalc a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(bgtzalc(a0, 32767),
+                           "1c047fff       bgtzalc a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bgezc(a0, -32768),
+                           "58848000       bgezc    a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bgezc(a0, -1), "5884ffff       bgezc    a0, -1", -1);
+    COMPARE_PC_REL_COMPACT(bgezc(a0, 1), "58840001       bgezc    a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(bgezc(a0, 32767),
+                           "58847fff       bgezc    a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bgec(a0, a1, -32768),
+                           "58858000       bgec     a0, a1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bgec(a0, a1, -1),
+                           "5885ffff       bgec     a0, a1, -1", -1);
+    COMPARE_PC_REL_COMPACT(bgec(a0, a1, 1), "58850001       bgec     a0, a1, 1",
+                           1);
+    COMPARE_PC_REL_COMPACT(bgec(a0, a1, 32767),
+                           "58857fff       bgec     a0, a1, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(blezc(a0, -32768),
+                           "58048000       blezc    a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(blezc(a0, -1), "5804ffff       blezc    a0, -1", -1);
+    COMPARE_PC_REL_COMPACT(blezc(a0, 1), "58040001       blezc    a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(blezc(a0, 32767),
+                           "58047fff       blezc    a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bltzc(a0, -32768),
+                           "5c848000       bltzc    a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bltzc(a0, -1), "5c84ffff       bltzc    a0, -1", -1);
+    COMPARE_PC_REL_COMPACT(bltzc(a0, 1), "5c840001       bltzc    a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(bltzc(a0, 32767),
+                           "5c847fff       bltzc    a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bltc(a0, a1, -32768),
+                           "5c858000       bltc    a0, a1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bltc(a0, a1, -1),
+                           "5c85ffff       bltc    a0, a1, -1", -1);
+    COMPARE_PC_REL_COMPACT(bltc(a0, a1, 1), "5c850001       bltc    a0, a1, 1",
+                           1);
+    COMPARE_PC_REL_COMPACT(bltc(a0, a1, 32767),
+                           "5c857fff       bltc    a0, a1, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bgtzc(a0, -32768),
+                           "5c048000       bgtzc    a0, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bgtzc(a0, -1), "5c04ffff       bgtzc    a0, -1", -1);
+    COMPARE_PC_REL_COMPACT(bgtzc(a0, 1), "5c040001       bgtzc    a0, 1", 1);
+    COMPARE_PC_REL_COMPACT(bgtzc(a0, 32767),
+                           "5c047fff       bgtzc    a0, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bc1eqz(-32768, f1),
+                           "45218000       bc1eqz    f1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bc1eqz(-1, f1), "4521ffff       bc1eqz    f1, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(bc1eqz(1, f1), "45210001       bc1eqz    f1, 1", 1);
+    COMPARE_PC_REL_COMPACT(bc1eqz(32767, f1),
+                           "45217fff       bc1eqz    f1, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bc1nez(-32768, f1),
+                           "45a18000       bc1nez    f1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bc1nez(-1, f1), "45a1ffff       bc1nez    f1, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(bc1nez(1, f1), "45a10001       bc1nez    f1, 1", 1);
+    COMPARE_PC_REL_COMPACT(bc1nez(32767, f1),
+                           "45a17fff       bc1nez    f1, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bovc(a1, a0, -1), "20a4ffff       bovc  a1, a0, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(bovc(a0, a0, 1), "20840001       bovc  a0, a0, 1",
+                           1);
+
+    COMPARE_PC_REL_COMPACT(beqc(a0, a1, -32768),
+                           "20858000       beqc    a0, a1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(beqc(a0, a1, -1),
+                           "2085ffff       beqc    a0, a1, -1", -1);
+    COMPARE_PC_REL_COMPACT(beqc(a0, a1, 1), "20850001       beqc    a0, a1, 1",
+                           1);
+    COMPARE_PC_REL_COMPACT(beqc(a0, a1, 32767),
+                           "20857fff       beqc    a0, a1, 32767", 32767);
+
+    COMPARE_PC_REL_COMPACT(bnec(a0, a1, -32768),
+                           "60858000       bnec  a0, a1, -32768", -32768);
+    COMPARE_PC_REL_COMPACT(bnec(a0, a1, -1), "6085ffff       bnec  a0, a1, -1",
+                           -1);
+    COMPARE_PC_REL_COMPACT(bnec(a0, a1, 1), "60850001       bnec  a0, a1, 1",
+                           1);
+    COMPARE_PC_REL_COMPACT(bnec(a0, a1, 32767),
+                           "60857fff       bnec  a0, a1, 32767", 32767);
+  }
+
+  COMPARE_PC_REL_COMPACT(bne(a0, a1, -32768),
+                         "14858000       bne     a0, a1, -32768", -32768);
+  COMPARE_PC_REL_COMPACT(bne(a0, a1, -1), "1485ffff       bne     a0, a1, -1",
+                         -1);
+  COMPARE_PC_REL_COMPACT(bne(a0, a1, 1), "14850001       bne     a0, a1, 1", 1);
+  COMPARE_PC_REL_COMPACT(bne(a0, a1, 32767),
+                         "14857fff       bne     a0, a1, 32767", 32767);
+
+  COMPARE_PC_REL_COMPACT(beq(a0, a1, -32768),
+                         "10858000       beq     a0, a1, -32768", -32768);
+  COMPARE_PC_REL_COMPACT(beq(a0, a1, -1), "1085ffff       beq     a0, a1, -1",
+                         -1);
+  COMPARE_PC_REL_COMPACT(beq(a0, a1, 1), "10850001       beq     a0, a1, 1", 1);
+  COMPARE_PC_REL_COMPACT(beq(a0, a1, 32767),
+                         "10857fff       beq     a0, a1, 32767", 32767);
+
+  COMPARE_PC_REL_COMPACT(bltz(a0, -32768), "04808000       bltz    a0, -32768",
+                         -32768);
+  COMPARE_PC_REL_COMPACT(bltz(a0, -1), "0480ffff       bltz    a0, -1", -1);
+  COMPARE_PC_REL_COMPACT(bltz(a0, 1), "04800001       bltz    a0, 1", 1);
+  COMPARE_PC_REL_COMPACT(bltz(a0, 32767), "04807fff       bltz    a0, 32767",
+                         32767);
+
+  COMPARE_PC_REL_COMPACT(bgez(a0, -32768), "04818000       bgez    a0, -32768",
+                         -32768);
+  COMPARE_PC_REL_COMPACT(bgez(a0, -1), "0481ffff       bgez    a0, -1", -1);
+  COMPARE_PC_REL_COMPACT(bgez(a0, 1), "04810001       bgez    a0, 1", 1);
+  COMPARE_PC_REL_COMPACT(bgez(a0, 32767), "04817fff       bgez    a0, 32767",
+                         32767);
+
+  COMPARE_PC_REL_COMPACT(blez(a0, -32768), "18808000       blez    a0, -32768",
+                         -32768);
+  COMPARE_PC_REL_COMPACT(blez(a0, -1), "1880ffff       blez    a0, -1", -1);
+  COMPARE_PC_REL_COMPACT(blez(a0, 1), "18800001       blez    a0, 1", 1);
+  COMPARE_PC_REL_COMPACT(blez(a0, 32767), "18807fff       blez    a0, 32767",
+                         32767);
+
+  COMPARE_PC_REL_COMPACT(bgtz(a0, -32768), "1c808000       bgtz    a0, -32768",
+                         -32768);
+  COMPARE_PC_REL_COMPACT(bgtz(a0, -1), "1c80ffff       bgtz    a0, -1", -1);
+  COMPARE_PC_REL_COMPACT(bgtz(a0, 1), "1c800001       bgtz    a0, 1", 1);
+  COMPARE_PC_REL_COMPACT(bgtz(a0, 32767), "1c807fff       bgtz    a0, 32767",
+                         32767);
+
+  int64_t pc_region;
+  GET_PC_REGION(pc_region);
+
+  int64_t target = pc_region | 0x4;
+  COMPARE_PC_JUMP(j(target), "08000001       j      ", target);
+  target = pc_region | 0xffffffc;
+  COMPARE_PC_JUMP(j(target), "0bffffff       j      ", target);
+
+  target = pc_region | 0x4;
+  COMPARE_PC_JUMP(jal(target), "0c000001       jal    ", target);
+  target = pc_region | 0xffffffc;
+  COMPARE_PC_JUMP(jal(target), "0fffffff       jal    ", target);
+
+  VERIFY_RUN();
+}
+
+
 TEST(C_FMT_DISASM) {
   if (kArchVariant == kMips64r2) {
     SET_UP();
@@ -890,5 +1264,32 @@ TEST(CVT_DISSASM) {
   COMPARE(cvt_s_d(f22, f24), "4620c5a0       cvt.s.d f22, f24");
   COMPARE(cvt_s_w(f22, f24), "4680c5a0       cvt.s.w f22, f24");
 
+  VERIFY_RUN();
+}
+
+
+TEST(ctc1_cfc1_disasm) {
+  SET_UP();
+  COMPARE(abs_d(f10, f31), "4620fa85       abs.d   f10, f31");
+  COMPARE(ceil_w_s(f8, f31), "4600fa0e       ceil.w.s f8, f31");
+  COMPARE(ctc1(a0, FCSR), "44c4f800       ctc1    a0, FCSR");
+  COMPARE(cfc1(a0, FCSR), "4444f800       cfc1    a0, FCSR");
+  VERIFY_RUN();
+}
+
+TEST(madd_msub_maddf_msubf) {
+  SET_UP();
+  if (kArchVariant == kMips64r2) {
+    COMPARE(madd_s(f4, f6, f8, f10), "4cca4120       madd.s  f4, f6, f8, f10");
+    COMPARE(madd_d(f4, f6, f8, f10), "4cca4121       madd.d  f4, f6, f8, f10");
+    COMPARE(msub_s(f4, f6, f8, f10), "4cca4128       msub.s  f4, f6, f8, f10");
+    COMPARE(msub_d(f4, f6, f8, f10), "4cca4129       msub.d  f4, f6, f8, f10");
+  }
+  if (kArchVariant == kMips64r6) {
+    COMPARE(maddf_s(f4, f8, f10), "460a4118       maddf.s  f4, f8, f10");
+    COMPARE(maddf_d(f4, f8, f10), "462a4118       maddf.d  f4, f8, f10");
+    COMPARE(msubf_s(f4, f8, f10), "460a4119       msubf.s  f4, f8, f10");
+    COMPARE(msubf_d(f4, f8, f10), "462a4119       msubf.d  f4, f8, f10");
+  }
   VERIFY_RUN();
 }

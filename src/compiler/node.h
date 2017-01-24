@@ -7,8 +7,8 @@
 
 #include "src/compiler/opcodes.h"
 #include "src/compiler/operator.h"
-#include "src/types-inl.h"
-#include "src/zone-containers.h"
+#include "src/compiler/types.h"
+#include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {
@@ -27,7 +27,7 @@ typedef uint32_t Mark;
 
 // NodeIds are identifying numbers for nodes that can be used to index auxiliary
 // out-of-line data associated with each node.
-typedef int32_t NodeId;
+typedef uint32_t NodeId;
 
 
 // A Node is the basic primitive of graphs. Nodes are chained together by
@@ -42,13 +42,13 @@ typedef int32_t NodeId;
 class Node final {
  public:
   static Node* New(Zone* zone, NodeId id, const Operator* op, int input_count,
-                   Node** inputs, bool has_extensible_inputs);
+                   Node* const* inputs, bool has_extensible_inputs);
+  static Node* Clone(Zone* zone, NodeId id, const Node* node);
 
   bool IsDead() const { return InputCount() > 0 && !InputAt(0); }
   void Kill();
 
   const Operator* op() const { return op_; }
-  void set_op(const Operator* op) { op_ = op; }
 
   IrOpcode::Value opcode() const {
     DCHECK(op_->opcode() <= IrOpcode::kLast);
@@ -100,6 +100,7 @@ class Node final {
 
   void AppendInput(Zone* zone, Node* new_to);
   void InsertInput(Zone* zone, int index, Node* new_to);
+  void InsertInputs(Zone* zone, int index, int count);
   void RemoveInput(int index);
   void NullAllInputs();
   void TrimInputCount(int new_input_count);
@@ -186,6 +187,7 @@ class Node final {
 
   // Returns true if {owner1} and {owner2} are the only users of {this} node.
   bool OwnedBy(Node const* owner1, Node const* owner2) const;
+  void Print() const;
 
  private:
   struct Use;
@@ -209,7 +211,6 @@ class Node final {
     uint32_t bit_field_;
 
     int input_index() const { return InputIndexField::decode(bit_field_); }
-    int output_index() const { return OutputIndexField::decode(bit_field_); }
     bool is_inline_use() const { return InlineField::decode(bit_field_); }
     Node** input_ptr() {
       int index = input_index();
@@ -228,7 +229,8 @@ class Node final {
 
     typedef BitField<bool, 0, 1> InlineField;
     typedef BitField<unsigned, 1, 17> InputIndexField;
-    typedef BitField<unsigned, 17, 14> OutputIndexField;
+    // Leaving some space in the bitset in case we ever decide to record
+    // the output index.
   };
 
   //============================================================================
@@ -283,9 +285,12 @@ class Node final {
 
   void* operator new(size_t, void* location) { return location; }
 
-  // Only NodeProperties should manipulate the bounds.
-  Bounds bounds() { return bounds_; }
-  void set_bounds(Bounds b) { bounds_ = b; }
+  // Only NodeProperties should manipulate the op.
+  void set_op(const Operator* op) { op_ = op; }
+
+  // Only NodeProperties should manipulate the type.
+  Type* type() const { return type_; }
+  void set_type(Type* type) { type_ = type; }
 
   // Only NodeMarkers should manipulate the marks on nodes.
   Mark mark() { return mark_; }
@@ -305,7 +310,7 @@ class Node final {
   static const int kMaxInlineCapacity = InlineCapacityField::kMax - 1;
 
   const Operator* op_;
-  Bounds bounds_;
+  Type* type_;
   Mark mark_;
   uint32_t bit_field_;
   Use* first_use_;

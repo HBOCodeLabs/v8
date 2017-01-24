@@ -26,8 +26,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-import os
 import subprocess
+import sys
 from threading import Timer
 
 from ..local import utils
@@ -61,19 +61,42 @@ def RunProcess(verbose, timeout, args, **rest):
     error_mode = SEM_NOGPFAULTERRORBOX
     prev_error_mode = Win32SetErrorMode(error_mode)
     Win32SetErrorMode(error_mode | prev_error_mode)
-  process = subprocess.Popen(
-    args=popen_args,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    **rest
-  )
+
+  try:
+    process = subprocess.Popen(
+      args=popen_args,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      **rest
+    )
+  except Exception as e:
+    sys.stderr.write("Error executing: %s\n" % popen_args)
+    raise e
+
   if (utils.IsWindows() and prev_error_mode != SEM_INVALID_VALUE):
     Win32SetErrorMode(prev_error_mode)
 
   def kill_process(process, timeout_result):
     timeout_result[0] = True
     try:
-      process.kill()
+      if utils.IsWindows():
+        if verbose:
+          print "Attempting to kill process %d" % process.pid
+          sys.stdout.flush()
+        tk = subprocess.Popen(
+            'taskkill /T /F /PID %d' % process.pid,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = tk.communicate()
+        if verbose:
+          print "Taskkill results for %d" % process.pid
+          print stdout
+          print stderr
+          print "Return code: %d" % tk.returncode
+          sys.stdout.flush()
+      else:
+        process.kill()
     except OSError:
       sys.stderr.write('Error: Process %s already ended.\n' % process.pid)
 
@@ -84,14 +107,16 @@ def RunProcess(verbose, timeout, args, **rest):
   timer.start()
   stdout, stderr = process.communicate()
   timer.cancel()
-  return process.returncode, timeout_result[0], stdout, stderr
+
+  return output.Output(
+      process.returncode,
+      timeout_result[0],
+      stdout.decode('utf-8', 'replace').encode('utf-8'),
+      stderr.decode('utf-8', 'replace').encode('utf-8'),
+      process.pid,
+  )
 
 
 def Execute(args, verbose=False, timeout=None):
   args = [ c for c in args if c != "" ]
-  exit_code, timed_out, stdout, stderr = RunProcess(
-    verbose,
-    timeout,
-    args=args,
-  )
-  return output.Output(exit_code, timed_out, stdout, stderr)
+  return RunProcess(verbose, timeout, args=args)

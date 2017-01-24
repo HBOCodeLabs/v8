@@ -4,6 +4,7 @@
 
 #include "src/property.h"
 
+#include "src/field-type.h"
 #include "src/handles-inl.h"
 #include "src/ostreams.h"
 
@@ -20,6 +21,11 @@ std::ostream& operator<<(std::ostream& os,
   return os;
 }
 
+DataDescriptor::DataDescriptor(Handle<Name> key, int field_index,
+                               PropertyAttributes attributes,
+                               Representation representation)
+    : Descriptor(key, FieldType::Any(key->GetIsolate()), attributes, DATA,
+                 representation, field_index) {}
 
 struct FastPropertyDetails {
   explicit FastPropertyDetails(const PropertyDetails& v) : details(v) {}
@@ -82,4 +88,5 @@ std::ostream& operator<<(std::ostream& os, const Descriptor& d) {
   return os;
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

@@ -6,7 +6,7 @@
 #define V8_COMPILER_GRAPH_REDUCER_H_
 
 #include "src/compiler/node-marker.h"
-#include "src/zone-containers.h"
+#include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {
@@ -19,7 +19,7 @@ class Node;
 
 // NodeIds are identifying numbers for nodes that can be used to index auxiliary
 // out-of-line data associated with each node.
-typedef int32_t NodeId;
+typedef uint32_t NodeId;
 
 
 // Represents the result of trying to reduce a node in the graph.
@@ -47,12 +47,10 @@ class Reducer {
   // Try to reduce a node if possible.
   virtual Reduction Reduce(Node* node) = 0;
 
-  // Ask this reducer to finish operation, returns {true} if the reducer is
-  // done, while {false} indicates that the graph might need to be reduced
-  // again.
-  // TODO(turbofan): Remove this once the dead node trimming is in the
-  // GraphReducer.
-  virtual bool Finish();
+  // Invoked by the {GraphReducer} when all nodes are done.  Can be used to
+  // do additional reductions at the end, which in turn can cause a new round
+  // of reductions.
+  virtual void Finalize();
 
   // Helper functions for subclasses to produce reductions for a node.
   static Reduction NoChange() { return Reduction(); }
@@ -75,11 +73,10 @@ class AdvancedReducer : public Reducer {
     // Revisit the {node} again later.
     virtual void Revisit(Node* node) = 0;
     // Replace value uses of {node} with {value} and effect uses of {node} with
-    // {effect}. If {effect == NULL}, then use the effect input to {node}. All
-    // control uses will be relaxed assuming {node} cannot throw.
-    virtual void ReplaceWithValue(Node* node, Node* value,
-                                  Node* effect = nullptr,
-                                  Node* control = nullptr) = 0;
+    // {effect}. If {effect == nullptr}, then use the effect input to {node}.
+    // All control uses will be relaxed assuming {node} cannot throw.
+    virtual void ReplaceWithValue(Node* node, Node* value, Node* effect,
+                                  Node* control) = 0;
   };
 
   explicit AdvancedReducer(Editor* editor) : editor_(editor) {}
@@ -107,15 +104,13 @@ class AdvancedReducer : public Reducer {
   // uses of {node} with the effect and control input to {node}.
   // TODO(turbofan): replace the effect input to {node} with {graph->start()}.
   void RelaxEffectsAndControls(Node* node) {
-    DCHECK_NOT_NULL(editor_);
-    editor_->ReplaceWithValue(node, node, nullptr, nullptr);
+    ReplaceWithValue(node, node, nullptr, nullptr);
   }
 
   // Relax the control uses of {node} by immediately replacing them with the
   // control input to {node}.
   void RelaxControls(Node* node) {
-    DCHECK_NOT_NULL(editor_);
-    editor_->ReplaceWithValue(node, node, node, nullptr);
+    ReplaceWithValue(node, node, node, nullptr);
   }
 
  private:
@@ -124,10 +119,10 @@ class AdvancedReducer : public Reducer {
 
 
 // Performs an iterative reduction of a node graph.
-class GraphReducer final : public AdvancedReducer::Editor {
+class GraphReducer : public AdvancedReducer::Editor {
  public:
-  GraphReducer(Graph* graph, Zone* zone);
-  ~GraphReducer() final;
+  GraphReducer(Zone* zone, Graph* graph, Node* dead = nullptr);
+  ~GraphReducer();
 
   Graph* graph() const { return graph_; }
 
@@ -154,10 +149,10 @@ class GraphReducer final : public AdvancedReducer::Editor {
   void Replace(Node* node, Node* replacement) final;
 
   // Replace value uses of {node} with {value} and effect uses of {node} with
-  // {effect}. If {effect == NULL}, then use the effect input to {node}. All
+  // {effect}. If {effect == nullptr}, then use the effect input to {node}. All
   // control uses will be relaxed assuming {node} cannot throw.
-  void ReplaceWithValue(Node* node, Node* value, Node* effect = nullptr,
-                        Node* control = nullptr) final;
+  void ReplaceWithValue(Node* node, Node* value, Node* effect,
+                        Node* control) final;
 
   // Replace all uses of {node} with {replacement} if the id of {replacement} is
   // less than or equal to {max_id}. Otherwise, replace all uses of {node} whose
@@ -173,6 +168,7 @@ class GraphReducer final : public AdvancedReducer::Editor {
   void Revisit(Node* node) final;
 
   Graph* const graph_;
+  Node* const dead_;
   NodeMarker<State> state_;
   ZoneVector<Reducer*> reducers_;
   ZoneStack<Node*> revisit_;

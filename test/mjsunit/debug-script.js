@@ -28,6 +28,11 @@
 // Flags: --expose-debug-as debug --expose-gc --send-idle-notification
 // Flags: --allow-natives-syntax --expose-natives-as natives
 // Flags: --noharmony-shipping
+// Flags: --nostress-opt
+
+// --nostress-opt is specified because in stress mode the compilation cache
+// may hold on to old copies of scripts (see bug 1641).
+
 // Note: this test checks that that the number of scripts reported as native
 // by Debug.scripts() is the same as a number of core native scripts.
 // Native scripts that are added by --harmony-shipping are classified
@@ -36,6 +41,7 @@
 
 // Get the Debug object exposed from the debug context global object.
 Debug = debug.Debug;
+Debug.setListener(function(){});
 
 Date();
 RegExp();
@@ -67,8 +73,8 @@ for (i = 0; i < scripts.length; i++) {
 
 // This has to be updated if the number of native scripts change.
 assertEquals(%NativeScriptsCount(), named_native_count);
-// Only the 'gc' extension is loaded.
-assertEquals(1, extension_count);
+// The 'gc' extension and one or two extras scripts are loaded.
+assertTrue(extension_count == 2 || extension_count == 3);
 // This script and mjsunit.js has been loaded.  If using d8, d8 loads
 // a normal script during startup too.
 assertTrue(normal_count == 2 || normal_count == 3);
@@ -77,11 +83,6 @@ assertTrue(normal_count == 2 || normal_count == 3);
 var math_script = Debug.findScript('native math.js');
 assertEquals('native math.js', math_script.name);
 assertEquals(Debug.ScriptType.Native, math_script.type);
-
-// Test a builtins delay loaded script.
-var date_delay_script = Debug.findScript('native date.js');
-assertEquals('native date.js', date_delay_script.name);
-assertEquals(Debug.ScriptType.Native, date_delay_script.type);
 
 // Test a debugger script.
 var debug_delay_script = Debug.findScript('native debug.js');
@@ -103,3 +104,5 @@ assertEquals(Debug.ScriptType.Normal, debug_script.type);
 // Check a nonexistent script.
 var dummy_script = Debug.findScript('dummy.js');
 assertTrue(typeof dummy_script == 'undefined');
+
+Debug.setListener(null);

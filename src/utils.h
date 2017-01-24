@@ -13,6 +13,7 @@
 #include "include/v8.h"
 #include "src/allocation.h"
 #include "src/base/bits.h"
+#include "src/base/compiler-specific.h"
 #include "src/base/logging.h"
 #include "src/base/macros.h"
 #include "src/base/platform/platform.h"
@@ -26,6 +27,21 @@ namespace internal {
 // ----------------------------------------------------------------------------
 // General helper functions
 
+// Returns the value (0 .. 15) of a hexadecimal character c.
+// If c is not a legal hexadecimal character, returns a value < 0.
+inline int HexValue(uc32 c) {
+  c -= '0';
+  if (static_cast<unsigned>(c) <= 9) return c;
+  c = (c | 0x20) - ('a' - '0');  // detect 0x11..0x16 and 0x31..0x36.
+  if (static_cast<unsigned>(c) <= 5) return c + 10;
+  return -1;
+}
+
+inline char HexCharOfValue(int value) {
+  DCHECK(0 <= value && value <= 16);
+  if (value < 10) return value + '0';
+  return value - 10 + 'A';
+}
 
 inline int BoolToInt(bool b) { return b ? 1 : 0; }
 
@@ -184,6 +200,23 @@ T Min(T a, T b) {
   return a < b ? a : b;
 }
 
+// Returns the maximum of the two parameters according to JavaScript semantics.
+template <typename T>
+T JSMax(T x, T y) {
+  if (std::isnan(x)) return x;
+  if (std::isnan(y)) return y;
+  if (std::signbit(x) < std::signbit(y)) return x;
+  return x > y ? x : y;
+}
+
+// Returns the maximum of the two parameters according to JavaScript semantics.
+template <typename T>
+T JSMin(T x, T y) {
+  if (std::isnan(x)) return x;
+  if (std::isnan(y)) return y;
+  if (std::signbit(x) < std::signbit(y)) return y;
+  return x > y ? y : x;
+}
 
 // Returns the absolute value of its argument.
 template <typename T>
@@ -200,6 +233,34 @@ inline double Floor(double x) {
   return std::floor(x);
 }
 
+inline double Pow(double x, double y) {
+  if (y == 0.0) return 1.0;
+  if (std::isnan(y) || ((x == 1 || x == -1) && std::isinf(y))) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+#if (defined(__MINGW64_VERSION_MAJOR) &&                              \
+     (!defined(__MINGW64_VERSION_RC) || __MINGW64_VERSION_RC < 1)) || \
+    defined(V8_OS_AIX)
+  // MinGW64 and AIX have a custom implementation for pow.  This handles certain
+  // special cases that are different.
+  if ((x == 0.0 || std::isinf(x)) && y != 0.0 && std::isfinite(y)) {
+    double f;
+    double result = ((x == 0.0) ^ (y > 0)) ? V8_INFINITY : 0;
+    /* retain sign if odd integer exponent */
+    return ((std::modf(y, &f) == 0.0) && (static_cast<int64_t>(y) & 1))
+               ? copysign(result, x)
+               : result;
+  }
+
+  if (x == 2.0) {
+    int y_int = static_cast<int>(y);
+    if (y == y_int) {
+      return std::ldexp(1.0, y_int);
+    }
+  }
+#endif
+  return std::pow(x, y);
+}
 
 // TODO(svenpanne) Clean up the whole power-of-2 mess.
 inline int32_t WhichPowerOf2Abs(int32_t x) {
@@ -265,8 +326,9 @@ class BitFieldBase {
   static T decode(U value) {
     return static_cast<T>((value & kMask) >> shift);
   }
-};
 
+  STATIC_ASSERT((kNext - 1) / 8 < sizeof(U));
+};
 
 template <class T, int shift, int size>
 class BitField8 : public BitFieldBase<T, shift, size, uint8_t> {};
@@ -366,9 +428,8 @@ inline uint32_t ComputePointerHash(void* ptr) {
 // ----------------------------------------------------------------------------
 // Generated memcpy/memmove
 
-// Initializes the codegen support that depends on CPU features. This is
-// called after CPU initialization.
-void init_memcopy_functions();
+// Initializes the codegen support that depends on CPU features.
+void init_memcopy_functions(Isolate* isolate);
 
 #if defined(V8_TARGET_ARCH_IA32) || defined(V8_TARGET_ARCH_X87)
 // Limit below which the extra overhead of the MemCopy function is likely
@@ -376,7 +437,7 @@ void init_memcopy_functions();
 const int kMinComplexMemCopy = 64;
 
 // Copy memory area. No restrictions.
-void MemMove(void* dest, const void* src, size_t size);
+V8_EXPORT_PRIVATE void MemMove(void* dest, const void* src, size_t size);
 typedef void (*MemMoveFunction)(void* dest, const void* src, size_t size);
 
 // Keep the distinction of "move" vs. "copy" for the benefit of other
@@ -387,7 +448,7 @@ V8_INLINE void MemCopy(void* dest, const void* src, size_t size) {
 #elif defined(V8_HOST_ARCH_ARM)
 typedef void (*MemCopyUint8Function)(uint8_t* dest, const uint8_t* src,
                                      size_t size);
-extern MemCopyUint8Function memcopy_uint8_function;
+V8_EXPORT_PRIVATE extern MemCopyUint8Function memcopy_uint8_function;
 V8_INLINE void MemCopyUint8Wrapper(uint8_t* dest, const uint8_t* src,
                                    size_t chars) {
   memcpy(dest, src, chars);
@@ -398,7 +459,8 @@ V8_INLINE void MemCopy(void* dest, const void* src, size_t size) {
   (*memcopy_uint8_function)(reinterpret_cast<uint8_t*>(dest),
                             reinterpret_cast<const uint8_t*>(src), size);
 }
-V8_INLINE void MemMove(void* dest, const void* src, size_t size) {
+V8_EXPORT_PRIVATE V8_INLINE void MemMove(void* dest, const void* src,
+                                         size_t size) {
   memmove(dest, src, size);
 }
 
@@ -416,7 +478,7 @@ V8_INLINE void MemCopyUint16Uint8(uint16_t* dest, const uint8_t* src,
 #elif defined(V8_HOST_ARCH_MIPS)
 typedef void (*MemCopyUint8Function)(uint8_t* dest, const uint8_t* src,
                                      size_t size);
-extern MemCopyUint8Function memcopy_uint8_function;
+V8_EXPORT_PRIVATE extern MemCopyUint8Function memcopy_uint8_function;
 V8_INLINE void MemCopyUint8Wrapper(uint8_t* dest, const uint8_t* src,
                                    size_t chars) {
   memcpy(dest, src, chars);
@@ -427,7 +489,8 @@ V8_INLINE void MemCopy(void* dest, const void* src, size_t size) {
   (*memcopy_uint8_function)(reinterpret_cast<uint8_t*>(dest),
                             reinterpret_cast<const uint8_t*>(src), size);
 }
-V8_INLINE void MemMove(void* dest, const void* src, size_t size) {
+V8_EXPORT_PRIVATE V8_INLINE void MemMove(void* dest, const void* src,
+                                         size_t size) {
   memmove(dest, src, size);
 }
 #else
@@ -435,7 +498,8 @@ V8_INLINE void MemMove(void* dest, const void* src, size_t size) {
 V8_INLINE void MemCopy(void* dest, const void* src, size_t size) {
   memcpy(dest, src, size);
 }
-V8_INLINE void MemMove(void* dest, const void* src, size_t size) {
+V8_EXPORT_PRIVATE V8_INLINE void MemMove(void* dest, const void* src,
+                                         size_t size) {
   memmove(dest, src, size);
 }
 const int kMinComplexMemCopy = 16 * kPointerSize;
@@ -538,240 +602,6 @@ class EmbeddedVector : public Vector<T> {
  private:
   T buffer_[kSize];
 };
-
-
-/*
- * A class that collects values into a backing store.
- * Specialized versions of the class can allow access to the backing store
- * in different ways.
- * There is no guarantee that the backing store is contiguous (and, as a
- * consequence, no guarantees that consecutively added elements are adjacent
- * in memory). The collector may move elements unless it has guaranteed not
- * to.
- */
-template <typename T, int growth_factor = 2, int max_growth = 1 * MB>
-class Collector {
- public:
-  explicit Collector(int initial_capacity = kMinCapacity)
-      : index_(0), size_(0) {
-    current_chunk_ = Vector<T>::New(initial_capacity);
-  }
-
-  virtual ~Collector() {
-    // Free backing store (in reverse allocation order).
-    current_chunk_.Dispose();
-    for (int i = chunks_.length() - 1; i >= 0; i--) {
-      chunks_.at(i).Dispose();
-    }
-  }
-
-  // Add a single element.
-  inline void Add(T value) {
-    if (index_ >= current_chunk_.length()) {
-      Grow(1);
-    }
-    current_chunk_[index_] = value;
-    index_++;
-    size_++;
-  }
-
-  // Add a block of contiguous elements and return a Vector backed by the
-  // memory area.
-  // A basic Collector will keep this vector valid as long as the Collector
-  // is alive.
-  inline Vector<T> AddBlock(int size, T initial_value) {
-    DCHECK(size > 0);
-    if (size > current_chunk_.length() - index_) {
-      Grow(size);
-    }
-    T* position = current_chunk_.start() + index_;
-    index_ += size;
-    size_ += size;
-    for (int i = 0; i < size; i++) {
-      position[i] = initial_value;
-    }
-    return Vector<T>(position, size);
-  }
-
-
-  // Add a contiguous block of elements and return a vector backed
-  // by the added block.
-  // A basic Collector will keep this vector valid as long as the Collector
-  // is alive.
-  inline Vector<T> AddBlock(Vector<const T> source) {
-    if (source.length() > current_chunk_.length() - index_) {
-      Grow(source.length());
-    }
-    T* position = current_chunk_.start() + index_;
-    index_ += source.length();
-    size_ += source.length();
-    for (int i = 0; i < source.length(); i++) {
-      position[i] = source[i];
-    }
-    return Vector<T>(position, source.length());
-  }
-
-
-  // Write the contents of the collector into the provided vector.
-  void WriteTo(Vector<T> destination) {
-    DCHECK(size_ <= destination.length());
-    int position = 0;
-    for (int i = 0; i < chunks_.length(); i++) {
-      Vector<T> chunk = chunks_.at(i);
-      for (int j = 0; j < chunk.length(); j++) {
-        destination[position] = chunk[j];
-        position++;
-      }
-    }
-    for (int i = 0; i < index_; i++) {
-      destination[position] = current_chunk_[i];
-      position++;
-    }
-  }
-
-  // Allocate a single contiguous vector, copy all the collected
-  // elements to the vector, and return it.
-  // The caller is responsible for freeing the memory of the returned
-  // vector (e.g., using Vector::Dispose).
-  Vector<T> ToVector() {
-    Vector<T> new_store = Vector<T>::New(size_);
-    WriteTo(new_store);
-    return new_store;
-  }
-
-  // Resets the collector to be empty.
-  virtual void Reset() {
-    for (int i = chunks_.length() - 1; i >= 0; i--) {
-      chunks_.at(i).Dispose();
-    }
-    chunks_.Rewind(0);
-    index_ = 0;
-    size_ = 0;
-  }
-
-  // Total number of elements added to collector so far.
-  inline int size() { return size_; }
-
- protected:
-  static const int kMinCapacity = 16;
-  List<Vector<T> > chunks_;
-  Vector<T> current_chunk_;  // Block of memory currently being written into.
-  int index_;  // Current index in current chunk.
-  int size_;  // Total number of elements in collector.
-
-  // Creates a new current chunk, and stores the old chunk in the chunks_ list.
-  void Grow(int min_capacity) {
-    DCHECK(growth_factor > 1);
-    int new_capacity;
-    int current_length = current_chunk_.length();
-    if (current_length < kMinCapacity) {
-      // The collector started out as empty.
-      new_capacity = min_capacity * growth_factor;
-      if (new_capacity < kMinCapacity) new_capacity = kMinCapacity;
-    } else {
-      int growth = current_length * (growth_factor - 1);
-      if (growth > max_growth) {
-        growth = max_growth;
-      }
-      new_capacity = current_length + growth;
-      if (new_capacity < min_capacity) {
-        new_capacity = min_capacity + growth;
-      }
-    }
-    NewChunk(new_capacity);
-    DCHECK(index_ + min_capacity <= current_chunk_.length());
-  }
-
-  // Before replacing the current chunk, give a subclass the option to move
-  // some of the current data into the new chunk. The function may update
-  // the current index_ value to represent data no longer in the current chunk.
-  // Returns the initial index of the new chunk (after copied data).
-  virtual void NewChunk(int new_capacity)  {
-    Vector<T> new_chunk = Vector<T>::New(new_capacity);
-    if (index_ > 0) {
-      chunks_.Add(current_chunk_.SubVector(0, index_));
-    } else {
-      current_chunk_.Dispose();
-    }
-    current_chunk_ = new_chunk;
-    index_ = 0;
-  }
-};
-
-
-/*
- * A collector that allows sequences of values to be guaranteed to
- * stay consecutive.
- * If the backing store grows while a sequence is active, the current
- * sequence might be moved, but after the sequence is ended, it will
- * not move again.
- * NOTICE: Blocks allocated using Collector::AddBlock(int) can move
- * as well, if inside an active sequence where another element is added.
- */
-template <typename T, int growth_factor = 2, int max_growth = 1 * MB>
-class SequenceCollector : public Collector<T, growth_factor, max_growth> {
- public:
-  explicit SequenceCollector(int initial_capacity)
-      : Collector<T, growth_factor, max_growth>(initial_capacity),
-        sequence_start_(kNoSequence) { }
-
-  virtual ~SequenceCollector() {}
-
-  void StartSequence() {
-    DCHECK(sequence_start_ == kNoSequence);
-    sequence_start_ = this->index_;
-  }
-
-  Vector<T> EndSequence() {
-    DCHECK(sequence_start_ != kNoSequence);
-    int sequence_start = sequence_start_;
-    sequence_start_ = kNoSequence;
-    if (sequence_start == this->index_) return Vector<T>();
-    return this->current_chunk_.SubVector(sequence_start, this->index_);
-  }
-
-  // Drops the currently added sequence, and all collected elements in it.
-  void DropSequence() {
-    DCHECK(sequence_start_ != kNoSequence);
-    int sequence_length = this->index_ - sequence_start_;
-    this->index_ = sequence_start_;
-    this->size_ -= sequence_length;
-    sequence_start_ = kNoSequence;
-  }
-
-  virtual void Reset() {
-    sequence_start_ = kNoSequence;
-    this->Collector<T, growth_factor, max_growth>::Reset();
-  }
-
- private:
-  static const int kNoSequence = -1;
-  int sequence_start_;
-
-  // Move the currently active sequence to the new chunk.
-  virtual void NewChunk(int new_capacity) {
-    if (sequence_start_ == kNoSequence) {
-      // Fall back on default behavior if no sequence has been started.
-      this->Collector<T, growth_factor, max_growth>::NewChunk(new_capacity);
-      return;
-    }
-    int sequence_length = this->index_ - sequence_start_;
-    Vector<T> new_chunk = Vector<T>::New(sequence_length + new_capacity);
-    DCHECK(sequence_length < new_chunk.length());
-    for (int i = 0; i < sequence_length; i++) {
-      new_chunk[i] = this->current_chunk_[sequence_start_ + i];
-    }
-    if (sequence_start_ > 0) {
-      this->chunks_.Add(this->current_chunk_.SubVector(0, sequence_start_));
-    } else {
-      this->current_chunk_.Dispose();
-    }
-    this->current_chunk_ = new_chunk;
-    this->index_ = sequence_length;
-    sequence_start_ = 0;
-  }
-};
-
 
 // Compare 8bit/16bit chars to 8bit/16bit chars.
 template <typename lchar, typename rchar>
@@ -1042,22 +872,31 @@ class TypeFeedbackId {
   int id_;
 };
 
+inline bool operator<(TypeFeedbackId lhs, TypeFeedbackId rhs) {
+  return lhs.ToInt() < rhs.ToInt();
+}
+inline bool operator>(TypeFeedbackId lhs, TypeFeedbackId rhs) {
+  return lhs.ToInt() > rhs.ToInt();
+}
 
-template <int dummy_parameter>
-class VectorSlot {
+
+class FeedbackVectorSlot {
  public:
-  explicit VectorSlot(int id) : id_(id) {}
+  FeedbackVectorSlot() : id_(kInvalidSlot) {}
+  explicit FeedbackVectorSlot(int id) : id_(id) {}
+
   int ToInt() const { return id_; }
 
-  static VectorSlot Invalid() { return VectorSlot(kInvalidSlot); }
+  static FeedbackVectorSlot Invalid() { return FeedbackVectorSlot(); }
   bool IsInvalid() const { return id_ == kInvalidSlot; }
 
-  VectorSlot next() const {
-    DCHECK(id_ != kInvalidSlot);
-    return VectorSlot(id_ + 1);
+  bool operator==(FeedbackVectorSlot that) const {
+    return this->id_ == that.id_;
   }
+  bool operator!=(FeedbackVectorSlot that) const { return !(*this == that); }
 
-  bool operator==(const VectorSlot& other) const { return id_ == other.id_; }
+  friend size_t hash_value(FeedbackVectorSlot slot) { return slot.ToInt(); }
+  friend std::ostream& operator<<(std::ostream& os, FeedbackVectorSlot);
 
  private:
   static const int kInvalidSlot = -1;
@@ -1066,16 +905,14 @@ class VectorSlot {
 };
 
 
-typedef VectorSlot<0> FeedbackVectorSlot;
-typedef VectorSlot<1> FeedbackVectorICSlot;
-
-
 class BailoutId {
  public:
   explicit BailoutId(int id) : id_(id) { }
   int ToInt() const { return id_; }
 
   static BailoutId None() { return BailoutId(kNoneId); }
+  static BailoutId ScriptContext() { return BailoutId(kScriptContextId); }
+  static BailoutId FunctionContext() { return BailoutId(kFunctionContextId); }
   static BailoutId FunctionEntry() { return BailoutId(kFunctionEntryId); }
   static BailoutId Declarations() { return BailoutId(kDeclarationsId); }
   static BailoutId FirstUsable() { return BailoutId(kFirstUsableId); }
@@ -1091,62 +928,56 @@ class BailoutId {
   static const int kNoneId = -1;
 
   // Using 0 could disguise errors.
-  static const int kFunctionEntryId = 2;
+  static const int kScriptContextId = 1;
+  static const int kFunctionContextId = 2;
+  static const int kFunctionEntryId = 3;
 
   // This AST id identifies the point after the declarations have been visited.
   // We need it to capture the environment effects of declarations that emit
   // code (function declarations).
-  static const int kDeclarationsId = 3;
+  static const int kDeclarationsId = 4;
 
   // Every FunctionState starts with this id.
-  static const int kFirstUsableId = 4;
+  static const int kFirstUsableId = 5;
 
   // Every compiled stub starts with this id.
-  static const int kStubEntryId = 5;
+  static const int kStubEntryId = 6;
 
   int id_;
 };
 
+class TokenDispenserForFinally {
+ public:
+  int GetBreakContinueToken() { return next_token_++; }
+  static const int kFallThroughToken = 0;
+  static const int kThrowToken = 1;
+  static const int kReturnToken = 2;
+
+  static const int kFirstBreakContinueToken = 3;
+  static const int kInvalidToken = -1;
+
+ private:
+  int next_token_ = kFirstBreakContinueToken;
+};
 
 // ----------------------------------------------------------------------------
 // I/O support.
 
-#if __GNUC__ >= 4
-// On gcc we can ask the compiler to check the types of %d-style format
-// specifiers and their associated arguments.  TODO(erikcorry) fix this
-// so it works on MacOSX.
-#if defined(__MACH__) && defined(__APPLE__)
-#define PRINTF_CHECKING
-#define FPRINTF_CHECKING
-#define PRINTF_METHOD_CHECKING
-#define FPRINTF_METHOD_CHECKING
-#else  // MacOsX.
-#define PRINTF_CHECKING __attribute__ ((format (printf, 1, 2)))
-#define FPRINTF_CHECKING __attribute__ ((format (printf, 2, 3)))
-#define PRINTF_METHOD_CHECKING __attribute__ ((format (printf, 2, 3)))
-#define FPRINTF_METHOD_CHECKING __attribute__ ((format (printf, 3, 4)))
-#endif
-#else
-#define PRINTF_CHECKING
-#define FPRINTF_CHECKING
-#define PRINTF_METHOD_CHECKING
-#define FPRINTF_METHOD_CHECKING
-#endif
-
 // Our version of printf().
-void PRINTF_CHECKING PrintF(const char* format, ...);
-void FPRINTF_CHECKING PrintF(FILE* out, const char* format, ...);
+void PRINTF_FORMAT(1, 2) PrintF(const char* format, ...);
+void PRINTF_FORMAT(2, 3) PrintF(FILE* out, const char* format, ...);
 
 // Prepends the current process ID to the output.
-void PRINTF_CHECKING PrintPID(const char* format, ...);
+void PRINTF_FORMAT(1, 2) PrintPID(const char* format, ...);
 
 // Prepends the current process ID and given isolate pointer to the output.
-void PrintIsolate(void* isolate, const char* format, ...);
+void PRINTF_FORMAT(2, 3) PrintIsolate(void* isolate, const char* format, ...);
 
 // Safe formatting print. Ensures that str is always null-terminated.
 // Returns the number of chars written, or -1 if output was truncated.
-int FPRINTF_CHECKING SNPrintF(Vector<char> str, const char* format, ...);
-int VSNPrintF(Vector<char> str, const char* format, va_list args);
+int PRINTF_FORMAT(2, 3) SNPrintF(Vector<char> str, const char* format, ...);
+int PRINTF_FORMAT(2, 0)
+    VSNPrintF(Vector<char> str, const char* format, va_list args);
 
 void StrNCpy(Vector<char> dest, const char* src, size_t n);
 
@@ -1199,17 +1030,6 @@ int WriteBytes(const char* filename,
 // to the file given by filename. Only the first len chars are written.
 int WriteAsCFile(const char* filename, const char* varname,
                  const char* str, int size, bool verbose = true);
-
-
-// ----------------------------------------------------------------------------
-// Data structures
-
-template <typename T>
-inline Vector< Handle<Object> > HandleVector(v8::internal::Handle<T>* elms,
-                                             int length) {
-  return Vector< Handle<Object> >(
-      reinterpret_cast<v8::internal::Handle<Object>*>(elms), length);
-}
 
 
 // ----------------------------------------------------------------------------
@@ -1304,13 +1124,6 @@ inline void MemsetPointer(T** dest, U* value, int counter) {
 #define STOS "stosq"
 #endif
 #endif
-#if defined(__native_client__)
-  // This STOS sequence does not validate for x86_64 Native Client.
-  // Here we #undef STOS to force use of the slower C version.
-  // TODO(bradchen): Profile V8 and implement a faster REP STOS
-  // here if the profile indicates it matters.
-#undef STOS
-#endif
 
 #if defined(MEMORY_SANITIZER)
   // MemorySanitizer does not understand inline assembly.
@@ -1358,7 +1171,7 @@ INLINE(void CopyCharsUnsigned(uint16_t* dest, const uint16_t* src,
 INLINE(void CopyCharsUnsigned(uint8_t* dest, const uint8_t* src, size_t chars));
 INLINE(void CopyCharsUnsigned(uint16_t* dest, const uint16_t* src,
                               size_t chars));
-#elif defined(V8_HOST_ARCH_PPC)
+#elif defined(V8_HOST_ARCH_PPC) || defined(V8_HOST_ARCH_S390)
 INLINE(void CopyCharsUnsigned(uint8_t* dest, const uint8_t* src, size_t chars));
 INLINE(void CopyCharsUnsigned(uint16_t* dest, const uint16_t* src,
                               size_t chars));
@@ -1521,7 +1334,7 @@ void CopyCharsUnsigned(uint16_t* dest, const uint16_t* src, size_t chars) {
     MemCopy(dest, src, chars * sizeof(*dest));
   }
 }
-#elif defined(V8_HOST_ARCH_PPC)
+#elif defined(V8_HOST_ARCH_PPC) || defined(V8_HOST_ARCH_S390)
 #define CASE(n)           \
   case n:                 \
     memcpy(dest, src, n); \
@@ -1660,10 +1473,11 @@ class StringBuilder : public SimpleStringBuilder {
   StringBuilder(char* buffer, int size) : SimpleStringBuilder(buffer, size) { }
 
   // Add formatted contents to the builder just like printf().
-  void AddFormatted(const char* format, ...);
+  void PRINTF_FORMAT(2, 3) AddFormatted(const char* format, ...);
 
   // Add formatted contents like printf based on a va_list.
-  void AddFormattedList(const char* format, va_list list);
+  void PRINTF_FORMAT(2, 0) AddFormattedList(const char* format, va_list list);
+
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(StringBuilder);
 };
@@ -1690,7 +1504,7 @@ bool StringToArrayIndex(Stream* stream, uint32_t* index) {
     d = stream->GetNext() - '0';
     if (d < 0 || d > 9) return false;
     // Check that the new result is below the 32 bit limit.
-    if (result > 429496729U - ((d > 5) ? 1 : 0)) return false;
+    if (result > 429496729U - ((d + 3) >> 3)) return false;
     result = (result * 10) + d;
   }
 
@@ -1708,6 +1522,81 @@ inline uintptr_t GetCurrentStackPosition() {
   return limit;
 }
 
+template <typename V>
+static inline V ReadUnalignedValue(const void* p) {
+#if !(V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM)
+  return *reinterpret_cast<const V*>(p);
+#else   // V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM
+  V r;
+  memmove(&r, p, sizeof(V));
+  return r;
+#endif  // V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM
+}
+
+template <typename V>
+static inline void WriteUnalignedValue(void* p, V value) {
+#if !(V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM)
+  *(reinterpret_cast<V*>(p)) = value;
+#else   // V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM
+  memmove(p, &value, sizeof(V));
+#endif  // V8_TARGET_ARCH_MIPS || V8_TARGET_ARCH_MIPS64 || V8_TARGET_ARCH_ARM
+}
+
+static inline double ReadFloatValue(const void* p) {
+  return ReadUnalignedValue<float>(p);
+}
+
+static inline double ReadDoubleValue(const void* p) {
+  return ReadUnalignedValue<double>(p);
+}
+
+static inline void WriteDoubleValue(void* p, double value) {
+  WriteUnalignedValue(p, value);
+}
+
+static inline uint16_t ReadUnalignedUInt16(const void* p) {
+  return ReadUnalignedValue<uint16_t>(p);
+}
+
+static inline void WriteUnalignedUInt16(void* p, uint16_t value) {
+  WriteUnalignedValue(p, value);
+}
+
+static inline uint32_t ReadUnalignedUInt32(const void* p) {
+  return ReadUnalignedValue<uint32_t>(p);
+}
+
+static inline void WriteUnalignedUInt32(void* p, uint32_t value) {
+  WriteUnalignedValue(p, value);
+}
+
+template <typename V>
+static inline V ReadLittleEndianValue(const void* p) {
+#if defined(V8_TARGET_LITTLE_ENDIAN)
+  return ReadUnalignedValue<V>(p);
+#elif defined(V8_TARGET_BIG_ENDIAN)
+  V ret = 0;
+  const byte* src = reinterpret_cast<const byte*>(p);
+  byte* dst = reinterpret_cast<byte*>(&ret);
+  for (size_t i = 0; i < sizeof(V); i++) {
+    dst[i] = src[sizeof(V) - i - 1];
+  }
+  return ret;
+#endif  // V8_TARGET_LITTLE_ENDIAN
+}
+
+template <typename V>
+static inline void WriteLittleEndianValue(void* p, V value) {
+#if defined(V8_TARGET_LITTLE_ENDIAN)
+  WriteUnalignedValue<V>(p, value);
+#elif defined(V8_TARGET_BIG_ENDIAN)
+  byte* src = reinterpret_cast<byte*>(&value);
+  byte* dst = reinterpret_cast<byte*>(p);
+  for (size_t i = 0; i < sizeof(V); i++) {
+    dst[i] = src[sizeof(V) - i - 1];
+  }
+#endif  // V8_TARGET_LITTLE_ENDIAN
+}
 }  // namespace internal
 }  // namespace v8
 

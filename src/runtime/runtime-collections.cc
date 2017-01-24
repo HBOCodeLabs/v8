@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
-
-#include "src/arguments.h"
 #include "src/runtime/runtime-utils.h"
 
+#include "src/arguments.h"
+#include "src/conversions-inl.h"
+#include "src/factory.h"
 
 namespace v8 {
 namespace internal {
@@ -31,7 +31,7 @@ RUNTIME_FUNCTION(Runtime_JSCollectionGetTable) {
   SealHandleScope shs(isolate);
   DCHECK(args.length() == 1);
   CONVERT_ARG_CHECKED(JSObject, object, 0);
-  RUNTIME_ASSERT(object->IsJSSet() || object->IsJSMap());
+  CHECK(object->IsJSSet() || object->IsJSMap());
   return static_cast<JSCollection*>(object)->table();
 }
 
@@ -40,14 +40,8 @@ RUNTIME_FUNCTION(Runtime_GenericHash) {
   HandleScope scope(isolate);
   DCHECK(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(Object, object, 0);
-  Handle<Smi> hash = Object::GetOrCreateHash(isolate, object);
-  return *hash;
-}
-
-
-void Runtime::JSSetInitialize(Isolate* isolate, Handle<JSSet> set) {
-  Handle<OrderedHashSet> table = isolate->factory()->NewOrderedHashSet();
-  set->set_table(*table);
+  Smi* hash = Object::GetOrCreateHash(isolate, object);
+  return hash;
 }
 
 
@@ -55,7 +49,7 @@ RUNTIME_FUNCTION(Runtime_SetInitialize) {
   HandleScope scope(isolate);
   DCHECK(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(JSSet, holder, 0);
-  Runtime::JSSetInitialize(isolate, holder);
+  JSSet::Initialize(holder, isolate);
   return *holder;
 }
 
@@ -86,9 +80,7 @@ RUNTIME_FUNCTION(Runtime_SetClear) {
   HandleScope scope(isolate);
   DCHECK(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(JSSet, holder, 0);
-  Handle<OrderedHashSet> table(OrderedHashSet::cast(holder->table()));
-  table = OrderedHashSet::Clear(table);
-  holder->set_table(*table);
+  JSSet::Clear(holder);
   return isolate->heap()->undefined_value();
 }
 
@@ -99,8 +91,8 @@ RUNTIME_FUNCTION(Runtime_SetIteratorInitialize) {
   CONVERT_ARG_HANDLE_CHECKED(JSSetIterator, holder, 0);
   CONVERT_ARG_HANDLE_CHECKED(JSSet, set, 1);
   CONVERT_SMI_ARG_CHECKED(kind, 2)
-  RUNTIME_ASSERT(kind == JSSetIterator::kKindValues ||
-                 kind == JSSetIterator::kKindEntries);
+  CHECK(kind == JSSetIterator::kKindValues ||
+        kind == JSSetIterator::kKindEntries);
   Handle<OrderedHashSet> table(OrderedHashSet::cast(set->table()));
   holder->set_table(*table);
   holder->set_index(Smi::FromInt(0));
@@ -148,17 +140,11 @@ RUNTIME_FUNCTION(Runtime_SetIteratorDetails) {
 }
 
 
-void Runtime::JSMapInitialize(Isolate* isolate, Handle<JSMap> map) {
-  Handle<OrderedHashMap> table = isolate->factory()->NewOrderedHashMap();
-  map->set_table(*table);
-}
-
-
 RUNTIME_FUNCTION(Runtime_MapInitialize) {
   HandleScope scope(isolate);
   DCHECK(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(JSMap, holder, 0);
-  Runtime::JSMapInitialize(isolate, holder);
+  JSMap::Initialize(holder, isolate);
   return *holder;
 }
 
@@ -178,9 +164,7 @@ RUNTIME_FUNCTION(Runtime_MapClear) {
   HandleScope scope(isolate);
   DCHECK(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(JSMap, holder, 0);
-  Handle<OrderedHashMap> table(OrderedHashMap::cast(holder->table()));
-  table = OrderedHashMap::Clear(table);
-  holder->set_table(*table);
+  JSMap::Clear(holder);
   return isolate->heap()->undefined_value();
 }
 
@@ -202,9 +186,9 @@ RUNTIME_FUNCTION(Runtime_MapIteratorInitialize) {
   CONVERT_ARG_HANDLE_CHECKED(JSMapIterator, holder, 0);
   CONVERT_ARG_HANDLE_CHECKED(JSMap, map, 1);
   CONVERT_SMI_ARG_CHECKED(kind, 2)
-  RUNTIME_ASSERT(kind == JSMapIterator::kKindKeys ||
-                 kind == JSMapIterator::kKindValues ||
-                 kind == JSMapIterator::kKindEntries);
+  CHECK(kind == JSMapIterator::kKindKeys ||
+        kind == JSMapIterator::kKindValues ||
+        kind == JSMapIterator::kKindEntries);
   Handle<OrderedHashMap> table(OrderedHashMap::cast(map->table()));
   holder->set_table(*table);
   holder->set_index(Smi::FromInt(0));
@@ -248,7 +232,7 @@ RUNTIME_FUNCTION(Runtime_GetWeakMapEntries) {
   DCHECK(args.length() == 2);
   CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, holder, 0);
   CONVERT_NUMBER_CHECKED(int, max_entries, Int32, args[1]);
-  RUNTIME_ASSERT(max_entries >= 0);
+  CHECK(max_entries >= 0);
 
   Handle<ObjectHashTable> table(ObjectHashTable::cast(holder->table()));
   if (max_entries == 0 || max_entries > table->NumberOfElements()) {
@@ -266,7 +250,7 @@ RUNTIME_FUNCTION(Runtime_GetWeakMapEntries) {
     int count = 0;
     for (int i = 0; count / 2 < max_entries && i < table->Capacity(); i++) {
       Handle<Object> key(table->KeyAt(i), isolate);
-      if (table->IsKey(*key)) {
+      if (table->IsKey(isolate, *key)) {
         entries->set(count++, *key);
         Object* value = table->Lookup(key);
         entries->set(count++, value);
@@ -287,19 +271,11 @@ RUNTIME_FUNCTION(Runtime_MapIteratorNext) {
 }
 
 
-void Runtime::WeakCollectionInitialize(
-    Isolate* isolate, Handle<JSWeakCollection> weak_collection) {
-  DCHECK(weak_collection->map()->inobject_properties() == 0);
-  Handle<ObjectHashTable> table = ObjectHashTable::New(isolate, 0);
-  weak_collection->set_table(*table);
-}
-
-
 RUNTIME_FUNCTION(Runtime_WeakCollectionInitialize) {
   HandleScope scope(isolate);
   DCHECK(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, weak_collection, 0);
-  Runtime::WeakCollectionInitialize(isolate, weak_collection);
+  JSWeakCollection::Initialize(weak_collection, isolate);
   return *weak_collection;
 }
 
@@ -310,12 +286,13 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionGet) {
   CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, weak_collection, 0);
   CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
   CONVERT_SMI_ARG_CHECKED(hash, 2)
-  RUNTIME_ASSERT(key->IsJSReceiver() || key->IsSymbol());
+  CHECK(key->IsJSReceiver() || key->IsSymbol());
   Handle<ObjectHashTable> table(
       ObjectHashTable::cast(weak_collection->table()));
-  RUNTIME_ASSERT(table->IsKey(*key));
+  CHECK(table->IsKey(isolate, *key));
   Handle<Object> lookup(table->Lookup(key, hash), isolate);
-  return lookup->IsTheHole() ? isolate->heap()->undefined_value() : *lookup;
+  return lookup->IsTheHole(isolate) ? isolate->heap()->undefined_value()
+                                    : *lookup;
 }
 
 
@@ -325,38 +302,12 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionHas) {
   CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, weak_collection, 0);
   CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
   CONVERT_SMI_ARG_CHECKED(hash, 2)
-  RUNTIME_ASSERT(key->IsJSReceiver() || key->IsSymbol());
+  CHECK(key->IsJSReceiver() || key->IsSymbol());
   Handle<ObjectHashTable> table(
       ObjectHashTable::cast(weak_collection->table()));
-  RUNTIME_ASSERT(table->IsKey(*key));
+  CHECK(table->IsKey(isolate, *key));
   Handle<Object> lookup(table->Lookup(key, hash), isolate);
-  return isolate->heap()->ToBoolean(!lookup->IsTheHole());
-}
-
-
-bool Runtime::WeakCollectionDelete(Handle<JSWeakCollection> weak_collection,
-                                   Handle<Object> key) {
-  int32_t hash =
-      Object::GetOrCreateHash(weak_collection->GetIsolate(), key)->value();
-  return WeakCollectionDelete(weak_collection, key, hash);
-}
-
-
-bool Runtime::WeakCollectionDelete(Handle<JSWeakCollection> weak_collection,
-                                   Handle<Object> key, int32_t hash) {
-  DCHECK(key->IsJSReceiver() || key->IsSymbol());
-  Handle<ObjectHashTable> table(
-      ObjectHashTable::cast(weak_collection->table()));
-  DCHECK(table->IsKey(*key));
-  bool was_present = false;
-  Handle<ObjectHashTable> new_table =
-      ObjectHashTable::Remove(table, key, &was_present, hash);
-  weak_collection->set_table(*new_table);
-  if (*table != *new_table) {
-    // Zap the old table since we didn't record slots for its elements.
-    table->FillWithHoles(0, table->length());
-  }
-  return was_present;
+  return isolate->heap()->ToBoolean(!lookup->IsTheHole(isolate));
 }
 
 
@@ -366,29 +317,12 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionDelete) {
   CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, weak_collection, 0);
   CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
   CONVERT_SMI_ARG_CHECKED(hash, 2)
-  RUNTIME_ASSERT(key->IsJSReceiver() || key->IsSymbol());
+  CHECK(key->IsJSReceiver() || key->IsSymbol());
   Handle<ObjectHashTable> table(
       ObjectHashTable::cast(weak_collection->table()));
-  RUNTIME_ASSERT(table->IsKey(*key));
-  bool was_present = Runtime::WeakCollectionDelete(weak_collection, key, hash);
+  CHECK(table->IsKey(isolate, *key));
+  bool was_present = JSWeakCollection::Delete(weak_collection, key, hash);
   return isolate->heap()->ToBoolean(was_present);
-}
-
-
-void Runtime::WeakCollectionSet(Handle<JSWeakCollection> weak_collection,
-                                Handle<Object> key, Handle<Object> value,
-                                int32_t hash) {
-  DCHECK(key->IsJSReceiver() || key->IsSymbol());
-  Handle<ObjectHashTable> table(
-      ObjectHashTable::cast(weak_collection->table()));
-  DCHECK(table->IsKey(*key));
-  Handle<ObjectHashTable> new_table =
-      ObjectHashTable::Put(table, key, value, hash);
-  weak_collection->set_table(*new_table);
-  if (*table != *new_table) {
-    // Zap the old table since we didn't record slots for its elements.
-    table->FillWithHoles(0, table->length());
-  }
 }
 
 
@@ -397,13 +331,13 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionSet) {
   DCHECK(args.length() == 4);
   CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, weak_collection, 0);
   CONVERT_ARG_HANDLE_CHECKED(Object, key, 1);
-  RUNTIME_ASSERT(key->IsJSReceiver() || key->IsSymbol());
+  CHECK(key->IsJSReceiver() || key->IsSymbol());
   CONVERT_ARG_HANDLE_CHECKED(Object, value, 2);
   CONVERT_SMI_ARG_CHECKED(hash, 3)
   Handle<ObjectHashTable> table(
       ObjectHashTable::cast(weak_collection->table()));
-  RUNTIME_ASSERT(table->IsKey(*key));
-  Runtime::WeakCollectionSet(weak_collection, key, value, hash);
+  CHECK(table->IsKey(isolate, *key));
+  JSWeakCollection::Set(weak_collection, key, value, hash);
   return *weak_collection;
 }
 
@@ -413,7 +347,7 @@ RUNTIME_FUNCTION(Runtime_GetWeakSetValues) {
   DCHECK(args.length() == 2);
   CONVERT_ARG_HANDLE_CHECKED(JSWeakCollection, holder, 0);
   CONVERT_NUMBER_CHECKED(int, max_values, Int32, args[1]);
-  RUNTIME_ASSERT(max_values >= 0);
+  CHECK(max_values >= 0);
 
   Handle<ObjectHashTable> table(ObjectHashTable::cast(holder->table()));
   if (max_values == 0 || max_values > table->NumberOfElements()) {
@@ -428,21 +362,12 @@ RUNTIME_FUNCTION(Runtime_GetWeakSetValues) {
     DisallowHeapAllocation no_gc;
     int count = 0;
     for (int i = 0; count < max_values && i < table->Capacity(); i++) {
-      Handle<Object> key(table->KeyAt(i), isolate);
-      if (table->IsKey(*key)) values->set(count++, *key);
+      Object* key = table->KeyAt(i);
+      if (table->IsKey(isolate, key)) values->set(count++, key);
     }
     DCHECK_EQ(max_values, count);
   }
   return *isolate->factory()->NewJSArrayWithElements(values);
-}
-
-
-RUNTIME_FUNCTION(Runtime_ObservationWeakMapCreate) {
-  HandleScope scope(isolate);
-  DCHECK(args.length() == 0);
-  Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
-  Runtime::WeakCollectionInitialize(isolate, weakmap);
-  return *weakmap;
 }
 }  // namespace internal
 }  // namespace v8

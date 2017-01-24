@@ -34,13 +34,13 @@
 #include <cmath>
 #endif  // __linux__
 
-#include "src/v8.h"
-
-#include "src/cpu-profiler.h"
-#include "src/log.h"
+#include "src/api.h"
 #include "src/log-utils.h"
+#include "src/log.h"
+#include "src/profiler/cpu-profiler.h"
 #include "src/snapshot/natives.h"
 #include "src/utils.h"
+#include "src/v8.h"
 #include "src/v8threads.h"
 #include "src/version.h"
 #include "src/vm-state-inl.h"
@@ -85,7 +85,7 @@ class ScopedLoggerInitializer {
     i::FLAG_log = saved_log_;
   }
 
-  v8::Handle<v8::Context>& env() { return env_; }
+  v8::Local<v8::Context>& env() { return env_; }
 
   v8::Isolate* isolate() { return isolate_; }
 
@@ -106,7 +106,7 @@ class ScopedLoggerInitializer {
   v8::Isolate* isolate_;
   v8::Isolate::Scope isolate_scope_;
   v8::HandleScope scope_;
-  v8::Handle<v8::Context> env_;
+  v8::Local<v8::Context> env_;
   Logger* logger_;
 
   DISALLOW_COPY_AND_ASSIGN(ScopedLoggerInitializer);
@@ -307,18 +307,21 @@ class SimpleExternalString : public v8::String::ExternalStringResource {
 
 TEST(Issue23768) {
   v8::HandleScope scope(CcTest::isolate());
-  v8::Handle<v8::Context> env = v8::Context::New(CcTest::isolate());
+  v8::Local<v8::Context> env = v8::Context::New(CcTest::isolate());
   env->Enter();
 
   SimpleExternalString source_ext_str("(function ext() {})();");
   v8::Local<v8::String> source =
-      v8::String::NewExternal(CcTest::isolate(), &source_ext_str);
+      v8::String::NewExternalTwoByte(CcTest::isolate(), &source_ext_str)
+          .ToLocalChecked();
   // Script needs to have a name in order to trigger InitLineEnds execution.
-  v8::Handle<v8::String> origin =
-      v8::String::NewFromUtf8(CcTest::isolate(), "issue-23768-test");
-  v8::Handle<v8::Script> evil_script = CompileWithOrigin(source, origin);
+  v8::Local<v8::String> origin =
+      v8::String::NewFromUtf8(CcTest::isolate(), "issue-23768-test",
+                              v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  v8::Local<v8::Script> evil_script = CompileWithOrigin(source, origin);
   CHECK(!evil_script.IsEmpty());
-  CHECK(!evil_script->Run().IsEmpty());
+  CHECK(!evil_script->Run(env).IsEmpty());
   i::Handle<i::ExternalTwoByteString> i_source(
       i::ExternalTwoByteString::cast(*v8::Utils::OpenHandle(*source)));
   // This situation can happen if source was an external string disposed
@@ -346,14 +349,18 @@ TEST(LogCallbacks) {
     v8::Local<v8::FunctionTemplate> obj = v8::Local<v8::FunctionTemplate>::New(
         isolate, v8::FunctionTemplate::New(isolate));
     obj->SetClassName(v8_str("Obj"));
-    v8::Handle<v8::ObjectTemplate> proto = obj->PrototypeTemplate();
+    v8::Local<v8::ObjectTemplate> proto = obj->PrototypeTemplate();
     v8::Local<v8::Signature> signature = v8::Signature::New(isolate, obj);
     proto->Set(v8_str("method1"),
                v8::FunctionTemplate::New(isolate, ObjMethod1,
-                                         v8::Handle<v8::Value>(), signature),
+                                         v8::Local<v8::Value>(), signature),
                static_cast<v8::PropertyAttribute>(v8::DontDelete));
 
-    initialize_logger.env()->Global()->Set(v8_str("Obj"), obj->GetFunction());
+    initialize_logger.env()
+        ->Global()
+        ->Set(initialize_logger.env(), v8_str("Obj"),
+              obj->GetFunction(initialize_logger.env()).ToLocalChecked())
+        .FromJust();
     CompileRun("Obj.prototype.method1.toString();");
 
     logger->LogCompiledFunctions();
@@ -363,10 +370,13 @@ TEST(LogCallbacks) {
         i::ReadFile(initialize_logger.StopLoggingGetTempFile(), &exists, true));
     CHECK(exists);
 
+    Address ObjMethod1_entry = reinterpret_cast<Address>(ObjMethod1);
+#if USES_FUNCTION_DESCRIPTORS
+    ObjMethod1_entry = *FUNCTION_ENTRYPOINT_ADDRESS(ObjMethod1_entry);
+#endif
     i::EmbeddedVector<char, 100> ref_data;
-    i::SNPrintF(ref_data,
-                "code-creation,Callback,-2,0x%" V8PRIxPTR ",1,\"method1\"",
-                reinterpret_cast<intptr_t>(ObjMethod1));
+    i::SNPrintF(ref_data, "code-creation,Callback,-2,%p,1,\"method1\"",
+                static_cast<void*>(ObjMethod1_entry));
 
     CHECK(StrNStr(log.start(), ref_data.start(), log.length()));
     log.Dispose();
@@ -401,7 +411,7 @@ TEST(LogAccessorCallbacks) {
     v8::Local<v8::FunctionTemplate> obj = v8::Local<v8::FunctionTemplate>::New(
         isolate, v8::FunctionTemplate::New(isolate));
     obj->SetClassName(v8_str("Obj"));
-    v8::Handle<v8::ObjectTemplate> inst = obj->InstanceTemplate();
+    v8::Local<v8::ObjectTemplate> inst = obj->InstanceTemplate();
     inst->SetAccessor(v8_str("prop1"), Prop1Getter, Prop1Setter);
     inst->SetAccessor(v8_str("prop2"), Prop2Getter);
 
@@ -412,22 +422,34 @@ TEST(LogAccessorCallbacks) {
         i::ReadFile(initialize_logger.StopLoggingGetTempFile(), &exists, true));
     CHECK(exists);
 
+    Address Prop1Getter_entry = reinterpret_cast<Address>(Prop1Getter);
+#if USES_FUNCTION_DESCRIPTORS
+    Prop1Getter_entry = *FUNCTION_ENTRYPOINT_ADDRESS(Prop1Getter_entry);
+#endif
     EmbeddedVector<char, 100> prop1_getter_record;
     i::SNPrintF(prop1_getter_record,
-                "code-creation,Callback,-2,0x%" V8PRIxPTR ",1,\"get prop1\"",
-                reinterpret_cast<intptr_t>(Prop1Getter));
+                "code-creation,Callback,-2,%p,1,\"get prop1\"",
+                static_cast<void*>(Prop1Getter_entry));
     CHECK(StrNStr(log.start(), prop1_getter_record.start(), log.length()));
 
+    Address Prop1Setter_entry = reinterpret_cast<Address>(Prop1Setter);
+#if USES_FUNCTION_DESCRIPTORS
+    Prop1Setter_entry = *FUNCTION_ENTRYPOINT_ADDRESS(Prop1Setter_entry);
+#endif
     EmbeddedVector<char, 100> prop1_setter_record;
     i::SNPrintF(prop1_setter_record,
-                "code-creation,Callback,-2,0x%" V8PRIxPTR ",1,\"set prop1\"",
-                reinterpret_cast<intptr_t>(Prop1Setter));
+                "code-creation,Callback,-2,%p,1,\"set prop1\"",
+                static_cast<void*>(Prop1Setter_entry));
     CHECK(StrNStr(log.start(), prop1_setter_record.start(), log.length()));
 
+    Address Prop2Getter_entry = reinterpret_cast<Address>(Prop2Getter);
+#if USES_FUNCTION_DESCRIPTORS
+    Prop2Getter_entry = *FUNCTION_ENTRYPOINT_ADDRESS(Prop2Getter_entry);
+#endif
     EmbeddedVector<char, 100> prop2_getter_record;
     i::SNPrintF(prop2_getter_record,
-                "code-creation,Callback,-2,0x%" V8PRIxPTR ",1,\"get prop2\"",
-                reinterpret_cast<intptr_t>(Prop2Getter));
+                "code-creation,Callback,-2,%p,1,\"get prop2\"",
+                static_cast<void*>(Prop2Getter_entry));
     CHECK(StrNStr(log.start(), prop2_getter_record.start(), log.length()));
     log.Dispose();
   }
@@ -464,7 +486,7 @@ TEST(EquivalenceOfLoggingAndTraversal) {
         "})(this);");
     logger->StopProfiler();
     reinterpret_cast<i::Isolate*>(isolate)->heap()->CollectAllGarbage(
-        i::Heap::kMakeHeapIterableMask);
+        i::Heap::kMakeHeapIterableMask, i::GarbageCollectionReason::kTesting);
     logger->StringEvent("test-logging-done", "");
 
     // Iterate heap to find compiled functions, will write to log.
@@ -475,29 +497,37 @@ TEST(EquivalenceOfLoggingAndTraversal) {
     i::Vector<const char> log(
         i::ReadFile(initialize_logger.StopLoggingGetTempFile(), &exists, true));
     CHECK(exists);
-    v8::Handle<v8::String> log_str = v8::String::NewFromUtf8(
-        isolate, log.start(), v8::String::kNormalString, log.length());
-    initialize_logger.env()->Global()->Set(v8_str("_log"), log_str);
+    v8::Local<v8::String> log_str =
+        v8::String::NewFromUtf8(isolate, log.start(),
+                                v8::NewStringType::kNormal, log.length())
+            .ToLocalChecked();
+    initialize_logger.env()
+        ->Global()
+        ->Set(initialize_logger.env(), v8_str("_log"), log_str)
+        .FromJust();
 
     i::Vector<const char> source = TestSources::GetScriptsSource();
-    v8::Handle<v8::String> source_str = v8::String::NewFromUtf8(
-        isolate, source.start(), v8::String::kNormalString, source.length());
-    v8::TryCatch try_catch;
-    v8::Handle<v8::Script> script = CompileWithOrigin(source_str, "");
+    v8::Local<v8::String> source_str =
+        v8::String::NewFromUtf8(isolate, source.start(),
+                                v8::NewStringType::kNormal, source.length())
+            .ToLocalChecked();
+    v8::TryCatch try_catch(isolate);
+    v8::Local<v8::Script> script = CompileWithOrigin(source_str, "");
     if (script.IsEmpty()) {
       v8::String::Utf8Value exception(try_catch.Exception());
       printf("compile: %s\n", *exception);
       CHECK(false);
     }
-    v8::Handle<v8::Value> result = script->Run();
-    if (result.IsEmpty()) {
+    v8::Local<v8::Value> result;
+    if (!script->Run(initialize_logger.env()).ToLocal(&result)) {
       v8::String::Utf8Value exception(try_catch.Exception());
       printf("run: %s\n", *exception);
       CHECK(false);
     }
     // The result either be a "true" literal or problem description.
     if (!result->IsTrue()) {
-      v8::Local<v8::String> s = result->ToString(isolate);
+      v8::Local<v8::String> s =
+          result->ToString(initialize_logger.env()).ToLocalChecked();
       i::ScopedVector<char> data(s->Utf8Length() + 1);
       CHECK(data.start());
       s->WriteUtf8(data.start());
@@ -528,6 +558,60 @@ TEST(LogVersion) {
                 i::Version::GetPatch(), i::Version::IsCandidate());
     CHECK(StrNStr(log.start(), ref_data.start(), log.length()));
     log.Dispose();
+  }
+  isolate->Dispose();
+}
+
+
+// https://crbug.com/539892
+// CodeCreateEvents with really large names should not crash.
+TEST(Issue539892) {
+  class : public i::CodeEventLogger {
+   public:
+    void CodeMoveEvent(i::AbstractCode* from, Address to) override {}
+    void CodeDisableOptEvent(i::AbstractCode* code,
+                             i::SharedFunctionInfo* shared) override {}
+
+   private:
+    void LogRecordedBuffer(i::AbstractCode* code, i::SharedFunctionInfo* shared,
+                           const char* name, int length) override {}
+  } code_event_logger;
+  SETUP_FLAGS();
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  v8::Isolate* isolate = v8::Isolate::New(create_params);
+
+  {
+    ScopedLoggerInitializer initialize_logger(saved_log, saved_prof, isolate);
+    Logger* logger = initialize_logger.logger();
+    logger->addCodeEventListener(&code_event_logger);
+
+    // Function with a really large name.
+    const char* source_text =
+        "(function "
+        "baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"
+        "(){})();";
+
+    CompileRun(source_text);
+
+    // Must not crash.
+    logger->LogCompiledFunctions();
   }
   isolate->Dispose();
 }

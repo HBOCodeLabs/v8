@@ -18,8 +18,6 @@ namespace internal {
 template <class T>
 class Handle;
 class HeapObject;
-template <class T>
-class Unique;
 
 namespace compiler {
 
@@ -31,7 +29,6 @@ class GraphTest : public TestWithContext, public TestWithIsolateAndZone {
   explicit GraphTest(int num_parameters = 1);
   ~GraphTest() override;
 
- protected:
   Node* start() { return graph()->start(); }
   Node* end() { return graph()->end(); }
 
@@ -45,11 +42,15 @@ class GraphTest : public TestWithContext, public TestWithIsolateAndZone {
   Node* Int64Constant(int64_t value);
   Node* NumberConstant(volatile double value);
   Node* HeapConstant(const Handle<HeapObject>& value);
-  Node* HeapConstant(const Unique<HeapObject>& value);
   Node* FalseConstant();
   Node* TrueConstant();
   Node* UndefinedConstant();
 
+  Node* EmptyFrameState();
+
+  Matcher<Node*> IsBooleanConstant(bool value) {
+    return value ? IsTrueConstant() : IsFalseConstant();
+  }
   Matcher<Node*> IsFalseConstant();
   Matcher<Node*> IsTrueConstant();
   Matcher<Node*> IsUndefinedConstant();

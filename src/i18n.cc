@@ -5,6 +5,11 @@
 
 #include "src/i18n.h"
 
+#include <memory>
+
+#include "src/api.h"
+#include "src/factory.h"
+#include "src/isolate.h"
 #include "unicode/brkiter.h"
 #include "unicode/calendar.h"
 #include "unicode/coll.h"
@@ -13,6 +18,7 @@
 #include "unicode/decimfmt.h"
 #include "unicode/dtfmtsym.h"
 #include "unicode/dtptngen.h"
+#include "unicode/gregocal.h"
 #include "unicode/locid.h"
 #include "unicode/numfmt.h"
 #include "unicode/numsys.h"
@@ -35,7 +41,8 @@ bool ExtractStringSetting(Isolate* isolate,
                           const char* key,
                           icu::UnicodeString* setting) {
   Handle<String> str = isolate->factory()->NewStringFromAsciiChecked(key);
-  Handle<Object> object = Object::GetProperty(options, str).ToHandleChecked();
+  Handle<Object> object =
+      JSReceiver::GetProperty(options, str).ToHandleChecked();
   if (object->IsString()) {
     v8::String::Utf8Value utf8_string(
         v8::Utils::ToLocal(Handle<String>::cast(object)));
@@ -51,7 +58,8 @@ bool ExtractIntegerSetting(Isolate* isolate,
                            const char* key,
                            int32_t* value) {
   Handle<String> str = isolate->factory()->NewStringFromAsciiChecked(key);
-  Handle<Object> object = Object::GetProperty(options, str).ToHandleChecked();
+  Handle<Object> object =
+      JSReceiver::GetProperty(options, str).ToHandleChecked();
   if (object->IsNumber()) {
     object->ToInt32(value);
     return true;
@@ -65,7 +73,8 @@ bool ExtractBooleanSetting(Isolate* isolate,
                            const char* key,
                            bool* value) {
   Handle<String> str = isolate->factory()->NewStringFromAsciiChecked(key);
-  Handle<Object> object = Object::GetProperty(options, str).ToHandleChecked();
+  Handle<Object> object =
+      JSReceiver::GetProperty(options, str).ToHandleChecked();
   if (object->IsBoolean()) {
     *value = object->BooleanValue();
     return true;
@@ -93,18 +102,26 @@ icu::SimpleDateFormat* CreateICUDateFormat(
   icu::Calendar* calendar =
       icu::Calendar::createInstance(tz, icu_locale, status);
 
+  if (calendar->getDynamicClassID() ==
+      icu::GregorianCalendar::getStaticClassID()) {
+    icu::GregorianCalendar* gc = (icu::GregorianCalendar*)calendar;
+    UErrorCode status = U_ZERO_ERROR;
+    // The beginning of ECMAScript time, namely -(2**53)
+    const double start_of_time = -9007199254740992;
+    gc->setGregorianChange(start_of_time, status);
+    DCHECK(U_SUCCESS(status));
+  }
+
   // Make formatter from skeleton. Calendar and numbering system are added
   // to the locale as Unicode extension (if they were specified at all).
   icu::SimpleDateFormat* date_format = NULL;
   icu::UnicodeString skeleton;
   if (ExtractStringSetting(isolate, options, "skeleton", &skeleton)) {
-    icu::DateTimePatternGenerator* generator =
-        icu::DateTimePatternGenerator::createInstance(icu_locale, status);
+    std::unique_ptr<icu::DateTimePatternGenerator> generator(
+        icu::DateTimePatternGenerator::createInstance(icu_locale, status));
     icu::UnicodeString pattern;
-    if (U_SUCCESS(status)) {
+    if (U_SUCCESS(status))
       pattern = generator->getBestPattern(skeleton, status);
-      delete generator;
-    }
 
     date_format = new icu::SimpleDateFormat(pattern, icu_locale, status);
     if (U_SUCCESS(status)) {
@@ -115,7 +132,7 @@ icu::SimpleDateFormat* CreateICUDateFormat(
   if (U_FAILURE(status)) {
     delete calendar;
     delete date_format;
-    date_format = NULL;
+    date_format = nullptr;
   }
 
   return date_format;
@@ -131,7 +148,7 @@ void SetResolvedDateSettings(Isolate* isolate,
   icu::UnicodeString pattern;
   date_format->toPattern(pattern);
   JSObject::SetProperty(
-      resolved, factory->NewStringFromStaticChars("pattern"),
+      resolved, factory->intl_pattern_symbol(),
       factory->NewStringFromTwoByte(
                    Vector<const uint16_t>(
                        reinterpret_cast<const uint16_t*>(pattern.getBuffer()),
@@ -140,6 +157,9 @@ void SetResolvedDateSettings(Isolate* isolate,
 
   // Set time zone and calendar.
   const icu::Calendar* calendar = date_format->getCalendar();
+  // getType() returns legacy calendar type name instead of LDML/BCP47 calendar
+  // key values. i18n.js maps them to BCP47 values for key "ca".
+  // TODO(jshin): Consider doing it here, instead.
   const char* calendar_name = calendar->getType();
   JSObject::SetProperty(resolved, factory->NewStringFromStaticChars("calendar"),
                         factory->NewStringFromAsciiChecked(calendar_name),
@@ -258,7 +278,24 @@ icu::DecimalFormat* CreateICUNumberFormat(
 #endif
 
       number_format = static_cast<icu::DecimalFormat*>(
-          icu::NumberFormat::createInstance(icu_locale, format_style,  status));
+          icu::NumberFormat::createInstance(icu_locale, format_style, status));
+
+      if (U_FAILURE(status)) {
+        delete number_format;
+        return NULL;
+      }
+
+      UErrorCode status_digits = U_ZERO_ERROR;
+      uint32_t fraction_digits = ucurr_getDefaultFractionDigits(
+        currency.getTerminatedBuffer(), &status_digits);
+      if (U_SUCCESS(status_digits)) {
+        number_format->setMinimumFractionDigits(fraction_digits);
+        number_format->setMaximumFractionDigits(fraction_digits);
+      } else {
+        // Set min & max to default values (previously in i18n.js)
+        number_format->setMinimumFractionDigits(0);
+        number_format->setMaximumFractionDigits(3);
+      }
     } else if (style == UNICODE_STRING_SIMPLE("percent")) {
       number_format = static_cast<icu::DecimalFormat*>(
           icu::NumberFormat::createPercentInstance(icu_locale, status));
@@ -336,7 +373,7 @@ void SetResolvedNumberSettings(Isolate* isolate,
   icu::UnicodeString pattern;
   number_format->toPattern(pattern);
   JSObject::SetProperty(
-      resolved, factory->NewStringFromStaticChars("pattern"),
+      resolved, factory->intl_pattern_symbol(),
       factory->NewStringFromTwoByte(
                    Vector<const uint16_t>(
                        reinterpret_cast<const uint16_t*>(pattern.getBuffer()),
@@ -734,25 +771,9 @@ icu::SimpleDateFormat* DateFormat::UnpackDateFormat(
   return NULL;
 }
 
-
-template<class T>
-void DeleteNativeObjectAt(const v8::WeakCallbackData<v8::Value, void>& data,
-                          int index) {
-  v8::Local<v8::Object> obj = v8::Handle<v8::Object>::Cast(data.GetValue());
-  delete reinterpret_cast<T*>(obj->GetAlignedPointerFromInternalField(index));
-}
-
-
-static void DestroyGlobalHandle(
-    const v8::WeakCallbackData<v8::Value, void>& data) {
+void DateFormat::DeleteDateFormat(const v8::WeakCallbackInfo<void>& data) {
+  delete reinterpret_cast<icu::SimpleDateFormat*>(data.GetInternalField(0));
   GlobalHandles::Destroy(reinterpret_cast<Object**>(data.GetParameter()));
-}
-
-
-void DateFormat::DeleteDateFormat(
-    const v8::WeakCallbackData<v8::Value, void>& data) {
-  DeleteNativeObjectAt<icu::SimpleDateFormat>(data, 0);
-  DestroyGlobalHandle(data);
 }
 
 
@@ -813,11 +834,9 @@ icu::DecimalFormat* NumberFormat::UnpackNumberFormat(
   return NULL;
 }
 
-
-void NumberFormat::DeleteNumberFormat(
-    const v8::WeakCallbackData<v8::Value, void>& data) {
-  DeleteNativeObjectAt<icu::DecimalFormat>(data, 0);
-  DestroyGlobalHandle(data);
+void NumberFormat::DeleteNumberFormat(const v8::WeakCallbackInfo<void>& data) {
+  delete reinterpret_cast<icu::DecimalFormat*>(data.GetInternalField(0));
+  GlobalHandles::Destroy(reinterpret_cast<Object**>(data.GetParameter()));
 }
 
 
@@ -874,11 +893,9 @@ icu::Collator* Collator::UnpackCollator(Isolate* isolate,
   return NULL;
 }
 
-
-void Collator::DeleteCollator(
-    const v8::WeakCallbackData<v8::Value, void>& data) {
-  DeleteNativeObjectAt<icu::Collator>(data, 0);
-  DestroyGlobalHandle(data);
+void Collator::DeleteCollator(const v8::WeakCallbackInfo<void>& data) {
+  delete reinterpret_cast<icu::Collator*>(data.GetInternalField(0));
+  GlobalHandles::Destroy(reinterpret_cast<Object**>(data.GetParameter()));
 }
 
 
@@ -939,12 +956,12 @@ icu::BreakIterator* BreakIterator::UnpackBreakIterator(Isolate* isolate,
   return NULL;
 }
 
-
 void BreakIterator::DeleteBreakIterator(
-    const v8::WeakCallbackData<v8::Value, void>& data) {
-  DeleteNativeObjectAt<icu::BreakIterator>(data, 0);
-  DeleteNativeObjectAt<icu::UnicodeString>(data, 1);
-  DestroyGlobalHandle(data);
+    const v8::WeakCallbackInfo<void>& data) {
+  delete reinterpret_cast<icu::BreakIterator*>(data.GetInternalField(0));
+  delete reinterpret_cast<icu::UnicodeString*>(data.GetInternalField(1));
+  GlobalHandles::Destroy(reinterpret_cast<Object**>(data.GetParameter()));
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

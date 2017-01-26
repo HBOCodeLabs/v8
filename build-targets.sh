@@ -43,9 +43,9 @@ for ABI in $ABILIST ; do
     esac
 
     make clean
-    make $V8TARGET i18nsupport=off -j 3 $V8OPTS component=static_library || exit 1
+    make $V8TARGET i18nsupport=off -j 6 $V8OPTS component=static_library || exit 1
     mkdir -p $BUNDLE/$ABI/lib
-    cp out/$V8TARGET/*.a $BUNDLE/$ABI/lib
+    cp out/$V8TARGET/obj.target/src/*.a $BUNDLE/$ABI/lib
 done
 
 (cd out ; tar czvf hadron-v8-bundle.tar.gz hadron-v8-bundle )

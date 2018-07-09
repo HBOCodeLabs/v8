@@ -6,7 +6,7 @@ cd "`dirname $0`"
 
 ABILIST="$@"
 if [ -z "$ABILIST" ] ; then
-    ABILIST="armeabi-v7a x86"
+    ABILIST="armeabi-v7a x86 arm64-v8a x86_64"
 fi
 
 gclient sync --nohooks
@@ -36,6 +36,13 @@ for ABI in $ABILIST ; do
         V8TARGET=android_ia32.release
 	V8OPTS="arm_version=default"
         ;;
+    x86_64)
+	V8TARGET=android_x64.release
+	V8OPTS="arm_version=default"
+	;;
+    arm64-v8a)
+	V8TARGET=android_arm64.release
+	;;
     *)
         echo "Unknown/unsupported ABI $ABI" 1>&2
         exit 1

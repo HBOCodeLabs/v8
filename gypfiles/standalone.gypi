@@ -1288,6 +1288,7 @@
                   # Don't export symbols from statically linked libraries.
                   '-Wl,--exclude-libs=ALL',
                 ],
+		'standalone_static_library': 1,
               }],
             ],
           }],  # _toolset=="target"
